@@ -90,7 +90,9 @@ class SceneObject:
     # object that converts to nothing removed, one that converts to two
     # given its sibling — rather than only the shape.
     _scene: object = field(default=None, repr=False, compare=False)
-
+    # Cache of the composed (local @ _transform) shape, so repeated .shape
+    # reads after a move do not re-copy the B-rep every time.
+    _shape_composed: object = field(default=None, repr=False, compare=False)
     @property
     def shape(self):
         """This object's geometry in world space, converting it first if
@@ -100,7 +102,8 @@ class SceneObject:
         call site left that can be handed a placeholder by mistake. The
         pose is composed on demand (a B-rep copy only when the pose is
         not identity) rather than baked in at move time, so a move is a
-        numpy multiply, not a geometry copy.
+        numpy multiply, not a geometry copy. The composed shape is cached
+        so repeated reads after a move do not re-copy the B-rep.
         """
         held = self._shape
         if isinstance(held, DeferredShape):
@@ -116,12 +119,17 @@ class SceneObject:
         t = self._transform
         if np.allclose(t, np.eye(4), atol=1e-12):
             return held
-        return geometry.apply_matrix(held, t)
+        if self._shape_composed is not None:
+            return self._shape_composed
+        composed = geometry.apply_matrix(held, t)
+        self._shape_composed = composed
+        return composed
 
     @shape.setter
     def shape(self, value):
         self._shape = value
         self._transform = np.eye(4, dtype=np.float64)
+        self._shape_composed = None
 
     @property
     def shape_ready(self) -> bool:
@@ -435,7 +443,8 @@ class Scene:
         """Swap an object's geometry (transform, boolean result, ...)."""
         old = self.objects[obj_id]
         new = replace(old, _shape=shape, kind=geometry.shape_kind(shape),
-                      _mesh=None, _transform=np.eye(4, dtype=np.float64))
+                      _mesh=None, _transform=np.eye(4, dtype=np.float64),
+                      _shape_composed=None)
         self.objects[obj_id] = new
         self._regenerate_dependents(obj_id)
         self.notify("objects")
@@ -501,7 +510,8 @@ class Scene:
         if obj._shape is None:
             return None
         new_transform = obj._transform @ m
-        return replace(obj, _transform=new_transform, _bounds=None)
+        return replace(obj, _transform=new_transform, _bounds=None,
+                      _shape_composed=None)
 
     def add_record(self, op: str, inputs: list, output: str, **params):
         """Remember how an object was built (record history)."""
