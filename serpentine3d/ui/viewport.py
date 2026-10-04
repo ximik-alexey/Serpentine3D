@@ -3795,10 +3795,9 @@ class Viewport(QOpenGLWidget):
             if b is None:
                 continue
             t = drag.get(obj.id)
-            if t is not None:
-                # a drag in flight: judge the object where it is shown,
-                # not where the shape still is
-                b = _pose_box(b, t)
+            pose = t @ obj._transform if t is not None else obj._transform
+            if not np.allclose(pose, np.eye(4), atol=1e-12):
+                b = _pose_box(b, pose)
             boxed.append((obj, b))
         if not boxed:
             return []
