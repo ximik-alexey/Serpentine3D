@@ -2220,8 +2220,8 @@ class Viewport(QOpenGLWidget):
                 # carries: fold the whole matrix in, in float64, before the
                 # anchor and the cast; the buffers stay where they were
                 # uploaded, and the rebased draws below keep their anchor.
-                omvp = anchored(mvp, anchor) @ obj._transform @ wm
-                oview = anchored(view, anchor) @ obj._transform @ wm
+                omvp = anchored(mvp, anchor) @ wm @ obj._transform
+                oview = anchored(view, anchor) @ wm @ obj._transform
                 oclips = anchored_clips(clips, anchor, wm)
                 posed = True
             else:
