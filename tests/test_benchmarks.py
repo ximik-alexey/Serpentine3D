@@ -16,7 +16,7 @@ from serpentine3d.core.scene import Scene
 def test_build_scene():
     _, objs = build_scene()
     assert len(objs) == N
-    assert GRID == (10, 10, 5)
+    assert GRID == (10, 15, 10)
     for o in objs:
         assert o.kind == "solid"
         assert o.mesh_ready is True

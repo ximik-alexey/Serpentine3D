@@ -433,33 +433,39 @@ class Scene:
         the carried vertices (no kernel walk). One batched notification for
         any number of objects.
         """
-        changed = False
         with self.batched():
-            for obj_id, m in transforms.items():
-                obj = self.objects.get(obj_id)
-                if obj is None:
-                    continue
-                m = self._norm_transform(m)
-                if m is None:
-                    continue
-                shape = obj.shape
-                if shape is None:
-                    continue
-                new_shape = geometry.apply_matrix(shape, m)
-                mesh = obj._mesh
-                new_mesh = mesh.transformed(m) if mesh is not None else None
-                new = replace(obj, _shape=new_shape, _mesh=new_mesh)
-                box = None
-                if new_mesh is not None:
-                    b = new_mesh.bounds()
-                    if b is not None:
-                        box = (tuple(np.asarray(b[0], float).tolist()),
-                               tuple(np.asarray(b[1], float).tolist()))
-                new._bounds = (new_shape, box) if box is not None else None
-                self.objects[obj_id] = new
-                changed = True
-        if changed:
-            self.notify("objects")
+            updates = {
+                obj_id: new
+                for obj_id, m in transforms.items()
+                if (new := self._carry_one(obj_id, m)) is not None
+            }
+            if updates:
+                self.objects.update(updates)
+                self.notify("objects")
+
+    def _carry_one(self, obj_id, m):
+        """Carry one object to its new pose; None if there is nothing to
+        carry (no such object, a non-normalising matrix, or no geometry)."""
+        obj = self.objects.get(obj_id)
+        if obj is None:
+            return None
+        m = self._norm_transform(m)
+        if m is None:
+            return None
+        shape = obj.shape
+        if shape is None:
+            return None
+        new_shape = geometry.apply_matrix(shape, m)
+        new_mesh = obj._mesh.transformed(m) if obj._mesh is not None else None
+        new = replace(obj, _shape=new_shape, _mesh=new_mesh)
+        box = None
+        if new_mesh is not None:
+            b = new_mesh.bounds()
+            if b is not None:
+                box = (tuple(np.asarray(b[0], float).tolist()),
+                       tuple(np.asarray(b[1], float).tolist()))
+        new._bounds = (new_shape, box) if box is not None else None
+        return new
 
     def add_record(self, op: str, inputs: list, output: str, **params):
         """Remember how an object was built (record history)."""

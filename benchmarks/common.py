@@ -16,12 +16,12 @@ import numpy as np
 from serpentine3d.core import geometry as g
 from serpentine3d.core.scene import Scene
 
-# The array: 10 x 10 x 5 = 500 tori, each major R=100 / minor r=25 (mm),
+# The array: 10 x 15 x 10 = 1500 tori, each major R=100 / minor r=25 (mm),
 # on a 300 mm lattice so the 200 mm tori do not overlap.
-GRID = (10, 10, 5)
+GRID = (10, 15, 10)
 MAJOR, MINOR = 100.0, 25.0
 STEP = 300.0
-N = 500
+N = 1500
 
 
 def build_scene():
