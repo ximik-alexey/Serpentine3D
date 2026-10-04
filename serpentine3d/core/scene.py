@@ -498,8 +498,8 @@ class Scene:
         carry (no such object, a non-normalising matrix, or no geometry).
 
         The pose is a numpy multiply on the transform field — no B-rep
-        copy, no deferred realization. The mesh is carried in numpy (no
-        re-tessellation); the box is invalidated (recomposed on read).
+        copy, no deferred realization. The local box is stable across
+        moves (only the pose changes) and stays cached.
         """
         obj = self.objects.get(obj_id)
         if obj is None:
@@ -510,8 +510,7 @@ class Scene:
         if obj._shape is None:
             return None
         new_transform = obj._transform @ m
-        return replace(obj, _transform=new_transform, _bounds=None,
-                      _shape_composed=None)
+        return replace(obj, _transform=new_transform, _shape_composed=None)
 
     def add_record(self, op: str, inputs: list, output: str, **params):
         """Remember how an object was built (record history)."""
