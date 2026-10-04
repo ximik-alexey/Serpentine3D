@@ -176,9 +176,9 @@ class SceneObject:
 
     @property
     def mesh(self) -> DisplayMesh:
-        # Tessellate the local geometry (no pose), then compose the pose
-        # in numpy. The tessellation is done once from the local geometry
-        # (stable across moves); the pose is applied on read.
+        # Tessellate the local geometry once; the pose is carried into
+        # the mesh at move time (numpy, no re-tessellation). A read
+        # returns the cached mesh — no per-frame copy.
         held = self._shape
         if isinstance(held, DeferredShape):
             scene = self._scene
@@ -193,10 +193,12 @@ class SceneObject:
         if self._mesh is None:
             with _tess_lock(held):
                 if self._mesh is None:
-                    self._mesh = tessellate(held)
-        if np.allclose(self._transform, np.eye(4), atol=1e-12):
-            return self._mesh
-        return self._mesh.transformed(self._transform)
+                    t = self._transform
+                    if np.allclose(t, np.eye(4), atol=1e-12):
+                        self._mesh = tessellate(held)
+                    else:
+                        self._mesh = tessellate(held).transformed(t)
+        return self._mesh
 
     @property
     def mesh_ready(self) -> bool:
@@ -503,7 +505,9 @@ class Scene:
         if obj._shape is None:
             return None
         new_transform = obj._transform @ m
-        return replace(obj, _transform=new_transform)
+        new_mesh = obj._mesh.transformed(m) if obj._mesh is not None else None
+        return replace(obj, _transform=new_transform, _mesh=new_mesh,
+                      _bounds=None)
 
     def add_record(self, op: str, inputs: list, output: str, **params):
         """Remember how an object was built (record history)."""
