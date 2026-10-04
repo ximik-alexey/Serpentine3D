@@ -84,6 +84,13 @@ class SceneObject:
     # object that converts to nothing removed, one that converts to two
     # given its sibling — rather than only the shape.
     _scene: object = field(default=None, repr=False, compare=False)
+    # A 4x4 (a, b, c, d, e, f, tx, ty, tz) awaiting a B-rep copy. set_transforms
+    # carries the mesh and the box now and defers the deep B-rep copy to the
+    # first `shape` read, so committing a large selection costs the numpy mesh
+    # carry, not N deep B-rep copies. The original _shape is never mutated:
+    # resolving this replaces it with a fresh copy, so an undo snapshot taken
+    # before the commit stays true.
+    _pending_transform: object = field(default=None, repr=False, compare=False)
 
     @property
     def shape(self):
@@ -101,11 +108,18 @@ class SceneObject:
                 shapes = held.shapes()
                 self._shape = shapes[0] if shapes else None
             held = self._shape
+        if self._pending_transform is not None:
+            m = self._pending_transform
+            self._pending_transform = None
+            if self._shape is not None:
+                self._shape = geometry.apply_matrix(self._shape, m)
+            held = self._shape
         return held
 
     @shape.setter
     def shape(self, value):
         self._shape = value
+        self._pending_transform = None
 
     @property
     def shape_ready(self) -> bool:
@@ -130,6 +144,8 @@ class SceneObject:
         the answer expires by itself and there is no invalidation to
         forget at a call site.
         """
+        if self._pending_transform is not None and self._bounds is not None:
+            return self._bounds[1]
         shape = self.shape
         if shape is None:
             return ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
@@ -146,6 +162,8 @@ class SceneObject:
         # holding. The scene drops it, but whoever was already iterating
         # still has it and will ask; an empty mesh draws nothing, which is
         # the right picture, where the kernel would raise on the way there.
+        if self._pending_transform is not None and self._mesh is not None:
+            return self._mesh
         shape = self.shape
         if shape is None:
             return DisplayMesh()
@@ -426,12 +444,15 @@ class Scene:
         """Move objects by 4x4 transform, carrying the geometry.
 
         This is what a committed gumball drag, and a move/rotate/scale
-        command, write: the shape is carried to its new pose as a fresh
-        copy (the original stands untouched, so an undo snapshot and a
-        journal shadow keyed on the old handle stay true), the mesh is
-        carried in numpy (no re-tessellation), and the box is taken from
-        the carried vertices (no kernel walk). One batched notification for
-        any number of objects.
+        command, write: the mesh is carried in numpy (no re-tessellation),
+        and the box is taken from the carried vertices (no kernel walk).
+        The deep B-rep copy is deferred: the 4x4 is stashed as
+        _pending_transform and applied only when `shape` is first read (a
+        boolean, a volume query, a serialisation). Committing a large
+        selection therefore costs the numpy mesh carry, not N deep B-rep
+        copies. The original shape is never mutated, so an undo snapshot
+        and a journal shadow keyed on the old handle stay true. One batched
+        notification for any number of objects.
         """
         changed = False
         with self.batched():
@@ -442,20 +463,27 @@ class Scene:
                 m = self._norm_transform(m)
                 if m is None:
                     continue
-                shape = obj.shape
-                if shape is None:
+                if obj._shape is None:
                     continue
-                new_shape = geometry.apply_matrix(shape, m)
                 mesh = obj._mesh
                 new_mesh = mesh.transformed(m) if mesh is not None else None
-                new = replace(obj, _shape=new_shape, _mesh=new_mesh)
+                new = replace(obj, _mesh=new_mesh)
+                # A second commit before the first was read composes, so both
+                # moves reach the B-rep; the mesh already carries both.
+                if obj._pending_transform is not None:
+                    new._pending_transform = m @ obj._pending_transform
+                else:
+                    new._pending_transform = m
                 box = None
                 if new_mesh is not None:
                     b = new_mesh.bounds()
                     if b is not None:
                         box = (tuple(np.asarray(b[0], float).tolist()),
                                tuple(np.asarray(b[1], float).tolist()))
-                new._bounds = (new_shape, box) if box is not None else None
+                # Keyed on the current (unmoved) shape: the bbox fast path
+                # returns it without touching `shape`, so the display never
+                # triggers the deferred B-rep copy.
+                new._bounds = (obj._shape, box) if box is not None else None
                 self.objects[obj_id] = new
                 changed = True
         if changed:
