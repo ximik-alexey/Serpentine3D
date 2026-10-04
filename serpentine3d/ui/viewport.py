@@ -3822,7 +3822,7 @@ class Viewport(QOpenGLWidget):
         if t is not None:
             # the chunk bounds are in the object's local frame
             off = np.array([(i & 1, i >> 1 & 1, i >> 2 & 1) for i in range(8)])
-            corners = np.where(off[None, :, None], maxs[:, None, :],
+            corners = np.where(off[None, :, :], maxs[:, None, :],
                                mins[:, None, :])
             wc = corners @ t[:3, :3].T + t[:3, 3]
             mins, maxs = wc.min(axis=1), wc.max(axis=1)
