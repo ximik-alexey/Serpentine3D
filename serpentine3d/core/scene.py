@@ -176,6 +176,12 @@ class Scene:
         self._batch_depth = 0           # see batched()
         self._batched_kinds: set[str] = set()
         self.revision = 0               # bumped on every change notification
+        # Where a live gumball drag, or a command preview, shows the dragged
+        # objects while the scene still holds their shapes where they were:
+        # id -> 4x4 display transform. Display only, so setting it bumps no
+        # revision and wakes no listener: that is what keeps a drag of a few
+        # hundred objects from re-meshing them on every mouse move.
+        self.drag_display: dict = {}
         self.named_views: dict = {}     # name -> camera params
         # Objects showing their control points. Kept here rather than on a
         # viewport because points on is something the drawing is doing: turn
@@ -393,6 +399,67 @@ class Scene:
         self._regenerate_dependents(obj_id)
         self.notify("objects")
         return new
+
+    def set_drag_display(self, transforms):
+        """Show `transforms` (id -> 4x4) while the shapes stand where they
+        were. Display only: no revision, no notification — a drag of a few
+        hundred objects must not wake the scene on every mouse move."""
+        self.drag_display = {k: np.asarray(v, float)
+                             for k, v in transforms.items()}
+
+    def clear_drag_display(self):
+        """The drag is over; the carried shapes are the truth again."""
+        self.drag_display = {}
+
+    @staticmethod
+    def _norm_transform(m):
+        """A 4x4 the way a carry wants it: float64, or None for the
+        identity — an identity carried would touch everything for nothing."""
+        if m is None:
+            return None
+        m = np.asarray(m, float)
+        if m.shape == (4, 4) and np.allclose(m, np.eye(4), atol=1e-12):
+            return None
+        return m
+
+    def set_transforms(self, transforms):
+        """Move objects by 4x4 transform, carrying the geometry.
+
+        This is what a committed gumball drag, and a move/rotate/scale
+        command, write: the shape is carried to its new pose as a fresh
+        copy (the original stands untouched, so an undo snapshot and a
+        journal shadow keyed on the old handle stay true), the mesh is
+        carried in numpy (no re-tessellation), and the box is taken from
+        the carried vertices (no kernel walk). One batched notification for
+        any number of objects.
+        """
+        changed = False
+        with self.batched():
+            for obj_id, m in transforms.items():
+                obj = self.objects.get(obj_id)
+                if obj is None:
+                    continue
+                m = self._norm_transform(m)
+                if m is None:
+                    continue
+                shape = obj.shape
+                if shape is None:
+                    continue
+                new_shape = geometry.apply_matrix(shape, m)
+                mesh = obj._mesh
+                new_mesh = mesh.transformed(m) if mesh is not None else None
+                new = replace(obj, _shape=new_shape, _mesh=new_mesh)
+                box = None
+                if new_mesh is not None:
+                    b = new_mesh.bounds()
+                    if b is not None:
+                        box = (tuple(np.asarray(b[0], float).tolist()),
+                               tuple(np.asarray(b[1], float).tolist()))
+                new._bounds = (new_shape, box) if box is not None else None
+                self.objects[obj_id] = new
+                changed = True
+        if changed:
+            self.notify("objects")
 
     def add_record(self, op: str, inputs: list, output: str, **params):
         """Remember how an object was built (record history)."""

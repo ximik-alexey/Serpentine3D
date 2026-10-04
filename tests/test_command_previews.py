@@ -6,6 +6,7 @@ the picks that are not distances: that the ghost actually tracks the cursor,
 and that it shows the thing the pick is about to decide.
 """
 
+import numpy as np
 import pytest
 
 import serpentine3d.commands  # registers all commands  # noqa: F401
@@ -35,12 +36,14 @@ def test_orient3pt_shows_where_the_objects_land(env):
     for p in ((0, 0, 0), (1, 0, 0), (0, 1, 0)):
         proc.provide(tuple(float(c) for c in p))
     assert "first target" in proc.request.prompt.lower()
-    ghost = proc.preview_for((10, 0, 0))
-    assert ghost is not None, "no ghost while placing the first target point"
-    lo, hi = g.bbox(ghost)
-    assert lo[0] == pytest.approx(10, abs=1e-6), (
-        "the ghost should sit where the cursor is")
-    assert hi[0] - lo[0] == pytest.approx(2, abs=1e-6)
+    proc.preview_for((10, 0, 0))
+    m = np.asarray(scene.drag_display[obj.id])
+    mn, mx = g.bbox(scene.get(obj.id).shape)
+    shown_mn = np.asarray(mn) @ m[:3, :3].T + m[:3, 3]
+    shown_mx = np.asarray(mx) @ m[:3, :3].T + m[:3, 3]
+    assert shown_mn[0] == pytest.approx(10, abs=1e-6), (
+        "the preview should sit where the cursor is")
+    assert shown_mx[0] - shown_mn[0] == pytest.approx(2, abs=1e-6)
 
 
 def test_a_control_point_curve_is_previewed_as_it_will_be_built(env):

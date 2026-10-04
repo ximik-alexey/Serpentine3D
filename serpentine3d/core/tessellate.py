@@ -112,6 +112,51 @@ class DisplayMesh:
             self._bounds = (np.min(los, axis=0), np.max(his, axis=0))
         return self._bounds
 
+    def transformed(self, m) -> "DisplayMesh":
+        """This mesh under a full 4x4 `m`: a new mesh, this one untouched.
+
+        Positions go by the affine map (rotation/scale part times the
+        position, plus the translation). Normals go by the inverse-transpose
+        of the 3x3 part, renormalized — correct for any affine, not just a
+        rigid move, so a scaled or mirrored mesh keeps its normals right.
+        The index arrays, the curvature and the topology maps are shared
+        (a transform moves no index); the bounds and the spatial indexes are
+        rebuilt from the moved data on first use, and the serial is new, so
+        a cache keyed on `uid` sees a mesh it has not been given before.
+        """
+        m = np.asarray(m, float)
+        R, t = m[:3, :3], m[:3, 3]
+
+        def moved(a):
+            if len(a):
+                return (a.astype(np.float64) @ R.T + t).astype(np.float32)
+            return a
+
+        n = self.normals
+        if len(n):
+            invt = np.linalg.inv(R).T
+            nn = n.astype(np.float64) @ invt
+            lens = np.linalg.norm(nn, axis=1, keepdims=True)
+            nn = np.divide(nn, lens, out=np.zeros_like(nn), where=lens > 0)
+            normals = nn.astype(np.float32)
+        else:
+            normals = n
+        return DisplayMesh(
+            vertices=moved(self.vertices),
+            normals=normals,
+            triangles=self.triangles,
+            edge_segments=moved(self.edge_segments),
+            iso_segments=moved(self.iso_segments),
+            curvature=self.curvature,
+            edge_of_segment=self.edge_of_segment,
+            face_of_triangle=self.face_of_triangle,
+            points=moved(self.points),
+            is_cloud=self.is_cloud,
+            cloud_colors=self.cloud_colors,
+            cloud_levels=self.cloud_levels,
+            has_curvature=self.has_curvature,
+        )
+
 
 def _deflection_for(shape) -> float:
     (mn, mx) = geometry.bbox(shape)

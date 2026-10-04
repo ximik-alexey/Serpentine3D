@@ -44,6 +44,43 @@ def _turned(p, anchor, axis, degrees):
             + k * float(np.dot(k, v)) * (1.0 - math.cos(a)))
 
 
+def _translation_matrix(delta):
+    """The 4x4 that carries every point by `delta`."""
+    m = np.eye(4)
+    m[:3, 3] = np.asarray(delta, float)
+    return m
+
+
+def _rotation_matrix(anchor, axis, degrees):
+    """The 4x4 that turns every point about the line through `anchor`
+    along `axis` — the matrix twin of _turned."""
+    k = np.asarray(axis, float)
+    k = k / (np.linalg.norm(k) or 1.0)
+    a = math.radians(degrees)
+    c, s = math.cos(a), math.sin(a)
+    kx, ky, kz = (float(v) for v in k)
+    om1 = 1.0 - c
+    R = np.array([
+        [c + kx * kx * om1, kx * ky * om1 - kz * s, kx * kz * om1 + ky * s],
+        [ky * kx * om1 + kz * s, c + ky * ky * om1, ky * kz * om1 - kx * s],
+        [kz * kx * om1 - ky * s, kz * ky * om1 + kx * s, c + kz * kz * om1]])
+    anchor = np.asarray(anchor, float)
+    m = np.eye(4)
+    m[:3, :3] = R
+    m[:3, 3] = anchor - R @ anchor
+    return m
+
+
+def _linear_about(anchor, linear):
+    """The 4x4 that runs `linear` (3x3, about the origin) about `anchor`."""
+    anchor = np.asarray(anchor, float)
+    linear = np.asarray(linear, float)
+    m = np.eye(4)
+    m[:3, :3] = linear
+    m[:3, 3] = anchor - linear @ anchor
+    return m
+
+
 def _alt_held(modifiers) -> bool:
     """Alt state, robust to a Qt KeyboardModifiers flag or a plain int."""
     m = getattr(modifiers, "value", modifiers)          # Qt flag -> int
@@ -1457,7 +1494,15 @@ class Gumball:
                     return d["last_label"]
                 factor = max(float(np.linalg.norm(hit - anchor))
                              / start_radius, 0.01)
-                self._scale_in_plane_by(anchor, axes[i], factor)
+                if self._whole(d):
+                    n = np.asarray(axes[i], float)
+                    plane = np.eye(3) - np.outer(n, n)
+                    d["matrix"] = _linear_about(
+                        anchor, np.eye(3) + (factor - 1.0) * plane)
+                    self.vp.scene.set_drag_display(
+                        {oid: d["matrix"] for oid in d["originals"]})
+                else:
+                    self._scale_in_plane_by(anchor, axes[i], factor)
                 d["reshaped"] = abs(factor - 1.0) > 1e-9
                 d["last_label"] = f"scale {factor:.3f} (in plane)"
                 return d["last_label"]
@@ -1475,7 +1520,12 @@ class Gumball:
                             float(np.linalg.norm(delta))))
                 return d["last_label"]
             d["offset"] = np.asarray(delta, float)
-            self._move_by(delta)
+            if self._whole(d):
+                d["matrix"] = _translation_matrix(delta)
+                self.vp.scene.set_drag_display(
+                    {oid: d["matrix"] for oid in d["originals"]})
+            else:
+                self._move_by(delta)
             d["last_label"] = ("move "
                                + vp.scene.format_length(float(
                                    np.linalg.norm(delta))))
@@ -1607,7 +1657,14 @@ class Gumball:
             else:
                 delta = axes[i] * value
                 d["offset"] = np.asarray(delta, float)
-                self._move_by(delta)
+                if self._whole(d):
+                    # Whole objects ride as a display transform until
+                    # release; end_drag commits it once.
+                    d["matrix"] = _translation_matrix(delta)
+                    self.vp.scene.set_drag_display(
+                        {oid: d["matrix"] for oid in d["originals"]})
+                else:
+                    self._move_by(delta)
                 label = "move " + vp.scene.format_length(float(value))
         elif kind == "rot" and d.get("pp"):   # tilt a held face
             oid, fidx = d["pp"]
@@ -1624,7 +1681,12 @@ class Gumball:
             d["turned"] = float(value)
             label = f"tilt {value:.1f}°"
         elif kind == "rot":
-            self._turn_by(anchor, axes[i], value)
+            if self._whole(d):
+                d["matrix"] = _rotation_matrix(anchor, axes[i], value)
+                self.vp.scene.set_drag_display(
+                    {oid: d["matrix"] for oid in d["originals"]})
+            else:
+                self._turn_by(anchor, axes[i], value)
             label = f"rotate {value:.1f}°"
         elif kind == "scale" and d.get("pp"):  # taper a held face
             if abs(value) < 1e-4:
@@ -1643,7 +1705,20 @@ class Gumball:
         elif kind == "scale":
             if abs(value) < 1e-4:
                 return d["last_label"]
-            if uniform:
+            if self._whole(d):
+                if uniform:
+                    linear = float(value) * np.eye(3)
+                else:
+                    axis = np.asarray(axes[i], float)
+                    linear = (np.eye(3) + np.outer(axis, axis)
+                              * (float(value) - 1.0))
+                d["matrix"] = _linear_about(anchor, linear)
+                d["reshaped"] = True
+                self.vp.scene.set_drag_display(
+                    {oid: d["matrix"] for oid in d["originals"]})
+                label = f"scale {value:.3f}" + (" (uniform)" if uniform
+                                                else "")
+            elif uniform:
                 self._scale_by(anchor, None, value)
                 label = f"scale {value:.3f} (uniform)"
             else:
@@ -1687,6 +1762,7 @@ class Gumball:
         val = self._parse_typed()
         if val is None:
             self._apply(lambda s: s)          # revert to originals
+            self.vp.scene.clear_drag_display()
             self.drag["offset"] = np.zeros(3)
             self.drag["last_label"] = ""
         else:
@@ -1712,6 +1788,25 @@ class Gumball:
     # control points, and every handle has to do the same thing to both. A
     # shape transform says nothing about where a single pole should end up,
     # so each of these says it once, in the two ways it has to be said.
+
+    def _whole(self, d):
+        """A move, rotate or scale of whole objects and nothing else: no
+        held points, segments, faces or fillets in the mix.
+
+        Only those drags can ride as a display transform while the scene
+        keeps the shapes where they were (Scene.drag_display); a drag that
+        rebuilds geometry has to show it in the scene on every step.
+        """
+        if d is None:
+            return False
+        handle = d.get("handle")
+        if handle is None or handle[0] not in ("move", "pad", "rot", "scale"):
+            return False
+        for key in ("cvs", "segments", "parts", "pp", "multiface",
+                    "fillet", "edge_move", "extrude"):
+            if d.get(key):
+                return False
+        return True
 
     def _apply_points(self, at, whole):
         """Held control points and held curve segments take the transform
@@ -1978,6 +2073,8 @@ class Gumball:
 
     def end_drag(self):
         d = self.drag
+        if d is not None and self._whole(d):
+            self._commit_whole(d)
         changed = d is not None and (
             float(np.linalg.norm(d["offset"])) > 1e-9
             or abs(float(d.get("turned", 0.0))) > 1e-9
@@ -2002,6 +2099,24 @@ class Gumball:
                     self.vp.selection.set(made)
         self.vp.selection.rebuilding = None
         self.drag = None
+
+    def _commit_whole(self, d):
+        """Commit what the display transform has been showing, once.
+
+        The scene kept the shapes where they were through the whole drag
+        and the panes showed the transform, so the only write is to carry
+        each shape to its new pose: set_transforms makes a fresh copy of
+        the shape at the new pose and carries the mesh, in one batched
+        notification. The original shape is left where it was.
+        """
+        vp = self.vp
+        m = d.get("matrix")
+        if m is not None and not np.allclose(m, np.eye(4), atol=1e-9):
+            vp.scene.set_transforms({
+                obj_id: m
+                for obj_id in d["originals"]
+                if vp.scene.get(obj_id) is not None})
+        vp.scene.clear_drag_display()
 
     def _clear_filleted_edges(self, d):
         """A committed fillet consumes the picked edges (their indices now
@@ -2167,11 +2282,11 @@ class Gumball:
             return
         vp = self.vp
         for obj_id in (d.get("made") or {}).values():
-            vp.scene.remove(obj_id)          # nothing grew, so nothing stays
+            vp.scene.remove(obj_id)   # nothing grew, so nothing stays
         for obj_id, original in d["originals"].items():
             if vp.scene.get(obj_id) is not None:
                 vp.scene.replace_shape(obj_id, original)
-        self.vp.window_discard_checkpoint()
+        vp.scene.clear_drag_display()
         self.vp.selection.rebuilding = None
         self.drag = None
 

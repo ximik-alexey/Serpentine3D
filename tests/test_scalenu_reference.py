@@ -85,7 +85,7 @@ def test_the_second_point_previews_while_you_drag(window):
     assert req.preview_fn is not None
     window._ghost_timer = None
     window._on_mouse_world((20.0, 0.0, 0.0))
-    assert window.viewport._ghost is not None
+    assert len(window.scene.drag_display) > 0
 
 
 def test_the_band_hangs_off_the_base_point(window):
@@ -108,11 +108,14 @@ def test_the_typed_factors_preview_as_you_type(window):
     """The other half of the same complaint: three numbers and no picture
     of what they do until the command is over."""
     _start(window, "0,0,0")
-    assert window.processor.preview_shape("2") is not None   # X factor
+    window.processor.preview_shape("2")   # X factor
+    assert len(window.scene.drag_display) > 0
     window.processor.provide_text("2")
-    assert window.processor.preview_shape("3") is not None   # Y factor
+    window.processor.preview_shape("3")   # Y factor
+    assert len(window.scene.drag_display) > 0
     window.processor.provide_text("3")
-    assert window.processor.preview_shape("0.5") is not None  # Z factor
+    window.processor.preview_shape("0.5")  # Z factor
+    assert len(window.scene.drag_display) > 0
 
 
 def test_a_reference_point_on_the_base_is_no_reference_at_all(window):

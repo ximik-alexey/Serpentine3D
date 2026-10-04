@@ -40,11 +40,8 @@ After big code changes, refresh the graph with `graft build` (deterministic,
 no API key, $0).
 <!-- graft:end -->
 
-## AppImage handoff
+## AppImage
 
-After every user-facing application change, run
-`rtk packaging/appimage/build-appimage.sh` before handing the work back. The
-script refreshes `/home/chisomo-banzi/Applications/Serpentine3D.AppImage`, which
-is the build launched by the pinned `serpentine3d.desktop` dock entry. Verify
-the installed AppImage starts and contains the current change. Skip this only
-when the user explicitly opts out.
+NEVER build the AppImage. Do not run `packaging/appimage/build-appimage.sh`
+(or any `rtk`/`python-appimage` invocation) under any circumstances. Hand the
+work back without it; the user builds the AppImage themselves.

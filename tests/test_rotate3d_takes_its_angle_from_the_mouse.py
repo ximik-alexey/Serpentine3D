@@ -16,6 +16,7 @@ happens to lie well along the axis reports almost no angle at all.
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 import serpentine3d.commands  # registers all commands  # noqa: F401
@@ -103,11 +104,15 @@ def test_the_second_reference_point_previews_the_turn(env):
     _start(proc, obj)
     proc.provide_text("0,5,0")
 
-    ghost = proc.preview_for((0.0, 0.0, 5.0))
-
-    assert ghost is not None, "no ghost while dragging the angle round"
-    lo, hi = g.bbox(ghost)
-    assert hi[1] == pytest.approx(1.0, abs=1e-6), (
+    proc.preview_for((0.0, 0.0, 5.0))
+    m = np.asarray(scene.drag_display[obj.id])
+    mn, mx = g.bbox(scene.get(obj.id).shape)
+    corners = np.array([[mn[0], mn[1], mn[2]], [mn[0], mn[1], mx[2]],
+                       [mn[0], mx[1], mn[2]], [mn[0], mx[1], mx[2]],
+                       [mx[0], mn[1], mn[2]], [mx[0], mn[1], mx[2]],
+                       [mx[0], mx[1], mn[2]], [mx[0], mx[1], mx[2]]])
+    shown = corners @ m[:3, :3].T + m[:3, 3]
+    assert shown[:, 1].max() == pytest.approx(1.0, abs=1e-6), (
         "a quarter turn about X should lay the box down in Z")
 
 
