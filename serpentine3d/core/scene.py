@@ -509,7 +509,7 @@ class Scene:
             return None
         if obj._shape is None:
             return None
-        new_transform = obj._transform @ m
+        new_transform = m @ obj._transform
         return replace(obj, _transform=new_transform, _shape_composed=None)
 
     def add_record(self, op: str, inputs: list, output: str, **params):
