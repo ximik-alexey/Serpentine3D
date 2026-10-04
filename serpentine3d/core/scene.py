@@ -79,6 +79,12 @@ class SceneObject:
     draw_order: int = 0                # higher draws on top (breaks depth ties)
     _mesh: DisplayMesh | None = field(default=None, repr=False, compare=False)
     _bounds: tuple | None = field(default=None, repr=False, compare=False)
+    # The object's pose, separate from its local geometry: a 4x4 matrix
+    # (identity by default). A move multiplies it (numpy, microseconds);
+    # the geometry is carried to world space on demand, not baked in.
+    _transform: np.ndarray = field(
+        default_factory=lambda: np.eye(4, dtype=np.float64),
+        repr=False, compare=False)
     # The scene holding this object, so a bare `.shape` read on something
     # deferred can go through `Scene.realise` and get the whole job — an
     # object that converts to nothing removed, one that converts to two
@@ -87,10 +93,14 @@ class SceneObject:
 
     @property
     def shape(self):
-        """This object's geometry, converting it first if it has not been.
+        """This object's geometry in world space, converting it first if
+        it has not been.
 
         Every reader goes through here, which is the point: there is no
-        call site left that can be handed a placeholder by mistake.
+        call site left that can be handed a placeholder by mistake. The
+        pose is composed on demand (a B-rep copy only when the pose is
+        not identity) rather than baked in at move time, so a move is a
+        numpy multiply, not a geometry copy.
         """
         held = self._shape
         if isinstance(held, DeferredShape):
@@ -101,11 +111,17 @@ class SceneObject:
                 shapes = held.shapes()
                 self._shape = shapes[0] if shapes else None
             held = self._shape
-        return held
+        if held is None:
+            return None
+        t = self._transform
+        if np.allclose(t, np.eye(4), atol=1e-12):
+            return held
+        return geometry.apply_matrix(held, t)
 
     @shape.setter
     def shape(self, value):
         self._shape = value
+        self._transform = np.eye(4, dtype=np.float64)
 
     @property
     def shape_ready(self) -> bool:
@@ -117,43 +133,70 @@ class SceneObject:
         return not isinstance(self._shape, DeferredShape)
 
     def bbox(self) -> tuple[tuple, tuple]:
-        """This object's world bounding box, worked out at most once.
+        """This object's world bounding box: the local box composed with
+        the pose in numpy.
 
-        Measuring a B-rep walks the whole shape and a mesh reads every
-        vertex — about 100us an object, which is nothing until something
-        asks for all of them every frame. The gumball does exactly that,
-        and on the cave file it cost 747 ms of every frame you orbited
-        with the drawing selected.
-
-        Keyed on the shape it measured rather than cleared by hand:
-        geometry is changed here by swapping the shape for a new one, so
-        the answer expires by itself and there is no invalidation to
-        forget at a call site.
+        The local box is measured at most once (a B-rep walk or a mesh
+        read, ~100us) and cached keyed on the local shape, which is
+        stable across moves. The pose is a numpy transform of the 8
+        corners (microseconds), recomposed on each read. This is what
+        the gumball asks for every frame on a selection, and on the
+        cave file it used to cost 747 ms of every frame.
         """
-        shape = self.shape
-        if shape is None:
+        held = self._shape
+        if isinstance(held, DeferredShape):
+            scene = self._scene
+            if scene is not None:
+                scene.realise(self.id)
+            else:
+                shapes = held.shapes()
+                self._shape = shapes[0] if shapes else None
+            held = self._shape
+        if held is None:
             return ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
         cached = self._bounds
-        if cached is not None and cached[0] is shape:
-            return cached[1]
-        box = geometry.bbox(shape)
-        self._bounds = (shape, box)
-        return box
+        if cached is not None and cached[0] is held:
+            local_box = cached[1]
+        else:
+            local_box = geometry.bbox(held)
+            self._bounds = (held, local_box)
+        t = self._transform
+        if np.allclose(t, np.eye(4), atol=1e-12):
+            return local_box
+        mn = np.asarray(local_box[0], float)
+        mx = np.asarray(local_box[1], float)
+        corners = np.empty((8, 3))
+        corners[:, 0] = [mn[0], mn[0], mn[0], mn[0], mx[0], mx[0], mx[0], mx[0]]
+        corners[:, 1] = [mn[1], mn[1], mx[1], mx[1], mn[1], mx[1], mn[1], mx[1]]
+        corners[:, 2] = [mn[2], mx[2], mn[2], mx[2], mn[2], mx[2], mn[2], mx[2]]
+        homog = np.column_stack([corners, np.ones(8)])
+        transformed = (t @ homog.T).T[:, :3]
+        return (tuple(transformed.min(axis=0).tolist()),
+                tuple(transformed.max(axis=0).tolist()))
 
     @property
     def mesh(self) -> DisplayMesh:
-        # None is what a deferred object that converted to nothing is left
-        # holding. The scene drops it, but whoever was already iterating
-        # still has it and will ask; an empty mesh draws nothing, which is
-        # the right picture, where the kernel would raise on the way there.
-        shape = self.shape
-        if shape is None:
+        # Tessellate the local geometry (no pose), then compose the pose
+        # in numpy. The tessellation is done once from the local geometry
+        # (stable across moves); the pose is applied on read.
+        held = self._shape
+        if isinstance(held, DeferredShape):
+            scene = self._scene
+            if scene is not None:
+                scene.realise(self.id)
+            else:
+                shapes = held.shapes()
+                self._shape = shapes[0] if shapes else None
+            held = self._shape
+        if held is None:
             return DisplayMesh()
         if self._mesh is None:
-            with _tess_lock(shape):
+            with _tess_lock(held):
                 if self._mesh is None:
-                    self._mesh = tessellate(shape)
-        return self._mesh
+                    self._mesh = tessellate(held)
+        if np.allclose(self._transform, np.eye(4), atol=1e-12):
+            return self._mesh
+        return self._mesh.transformed(self._transform)
 
     @property
     def mesh_ready(self) -> bool:
@@ -394,7 +437,7 @@ class Scene:
         """Swap an object's geometry (transform, boolean result, ...)."""
         old = self.objects[obj_id]
         new = replace(old, _shape=shape, kind=geometry.shape_kind(shape),
-                      _mesh=None)
+                      _mesh=None, _transform=np.eye(4, dtype=np.float64))
         self.objects[obj_id] = new
         self._regenerate_dependents(obj_id)
         self.notify("objects")
@@ -445,27 +488,22 @@ class Scene:
 
     def _carry_one(self, obj_id, m):
         """Carry one object to its new pose; None if there is nothing to
-        carry (no such object, a non-normalising matrix, or no geometry)."""
+        carry (no such object, a non-normalising matrix, or no geometry).
+
+        The pose is a numpy multiply on the transform field — no B-rep
+        copy, no deferred realization. The mesh is carried in numpy (no
+        re-tessellation); the box is invalidated (recomposed on read).
+        """
         obj = self.objects.get(obj_id)
         if obj is None:
             return None
         m = self._norm_transform(m)
         if m is None:
             return None
-        shape = obj.shape
-        if shape is None:
+        if obj._shape is None:
             return None
-        new_shape = geometry.apply_matrix(shape, m)
-        new_mesh = obj._mesh.transformed(m) if obj._mesh is not None else None
-        new = replace(obj, _shape=new_shape, _mesh=new_mesh)
-        box = None
-        if new_mesh is not None:
-            b = new_mesh.bounds()
-            if b is not None:
-                box = (tuple(np.asarray(b[0], float).tolist()),
-                       tuple(np.asarray(b[1], float).tolist()))
-        new._bounds = (new_shape, box) if box is not None else None
-        return new
+        new_transform = obj._transform @ m
+        return replace(obj, _transform=new_transform)
 
     def add_record(self, op: str, inputs: list, output: str, **params):
         """Remember how an object was built (record history)."""
