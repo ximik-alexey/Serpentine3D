@@ -2220,8 +2220,8 @@ class Viewport(QOpenGLWidget):
                 # carries: fold the whole matrix in, in float64, before the
                 # anchor and the cast; the buffers stay where they were
                 # uploaded, and the rebased draws below keep their anchor.
-                omvp = anchored(mvp @ obj._transform @ wm, anchor)
-                oview = anchored(view @ obj._transform @ wm, anchor)
+                omvp = anchored(mvp, anchor) @ obj._transform @ wm
+                oview = anchored(view, anchor) @ obj._transform @ wm
                 oclips = anchored_clips(clips, anchor, wm)
                 posed = True
             else:
@@ -2232,8 +2232,8 @@ class Viewport(QOpenGLWidget):
                     # object moves with it.
                     anchor = (anchor + wm[:3, 3]) if anchor is not None \
                         else np.asarray(wm[:3, 3], float)
-                omvp = flat if anchor is None else anchored(mvp @ obj._transform, anchor)
-                oview = flat_view if anchor is None else anchored(view @ obj._transform, anchor)
+                omvp = flat @ obj._transform if anchor is None else anchored(mvp, anchor) @ obj._transform
+                oview = flat_view @ obj._transform if anchor is None else anchored(view, anchor) @ obj._transform
                 oclips = anchored_clips(clips, anchor)
                 posed = False
             if clips and (anchor is not None or posed or clips_dirty):
