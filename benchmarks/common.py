@@ -16,18 +16,24 @@ import numpy as np
 from serpentine3d.core import geometry as g
 from serpentine3d.core.scene import Scene
 
+# The array: 10 x 10 x 5 = 500 tori, each major R=100 / minor r=25 (mm),
+# on a 300 mm lattice so the 200 mm tori do not overlap.
+GRID = (10, 10, 5)
+MAJOR, MINOR = 100.0, 25.0
+STEP = 300.0
 N = 500
 
 
-def build_scene(n):
-    """Create n torus objects and tessellate them (a drawn scene)."""
+def build_scene():
+    """Create the torus array (500) and tessellate it (a drawn scene)."""
     scene = Scene()
     objs = []
-    for i in range(n):
-        # spread the tori so their boxes are real, not stacked at the origin
-        torus = g.make_torus(
-            (i * 3.0, (i % 10) * 3.0, 0.0), 2.0, 0.5)
-        objs.append(scene.add(torus))
+    for ix in range(GRID[0]):
+        for iy in range(GRID[1]):
+            for iz in range(GRID[2]):
+                torus = g.make_torus(
+                    (ix * STEP, iy * STEP, iz * STEP), MAJOR, MINOR)
+                objs.append(scene.add(torus))
     for o in objs:          # force tessellation: a drawn scene
         _ = o.mesh
     return scene, objs
@@ -73,7 +79,7 @@ def mode():
 def bench(op):
     """Build a scene, apply `op` to all N, then a full redraw. Returns
     (apply_t, redraw_t) in seconds."""
-    scene, objs = build_scene(N)
+    scene, objs = build_scene()
     m = make_matrix(op)
     t0 = time.perf_counter()
     apply_op(scene, objs, m)
