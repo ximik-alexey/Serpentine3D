@@ -26,6 +26,8 @@ def test_set_transforms_carries_geometry():
     assert ox1 == pytest.approx(10.0, abs=1e-6)
 
     o2 = s.objects[o.id]
-    assert o2.mesh.vertices[:, 0].min() >= 29
+    # The mesh stays in local coordinates; the pose is in _transform.
+    assert o2.mesh.vertices[:, 0].min() == pytest.approx(0.0, abs=1e-6)
+    assert o2._transform[0, 3] == pytest.approx(30.0, abs=1e-6)
 
     assert len(seen) == 1

@@ -30,8 +30,10 @@ def test_brep_box_carry_moves_snaps():
     obj1 = s.objects[id1]
     verts = obj1.mesh.vertices
     xs = verts[:, 0]
-    assert xs.min() >= 30 - 1e-6
-    assert xs.max() <= 40 + 1e-6
+    # The mesh stays in local coordinates; the pose is in _transform.
+    assert xs.min() == pytest.approx(0.0, abs=1e-6)
+    assert xs.max() == pytest.approx(10.0, abs=1e-6)
+    assert obj1._transform[0, 3] == pytest.approx(30.0, abs=1e-6)
 
     normals = obj1.mesh.normals
     norms = np.linalg.norm(normals, axis=1)

@@ -1357,7 +1357,10 @@ class Viewport(QOpenGLWidget):
         painter.setFont(font)
         fm = painter.fontMetrics()
         for obj in dots:
-            anchor = obj.mesh.points[0].astype(float)
+            anchor = obj.mesh.points[0].astype(np.float64)
+            t = obj._transform
+            if not np.allclose(t, np.eye(4), atol=1e-12):
+                anchor = anchor @ t[:3, :3].T + t[:3, 3]
             scr = self.camera.project(anchor.reshape(1, 3), w, h)[0]
             if scr[2] <= 0:
                 continue
@@ -1597,11 +1600,8 @@ class Viewport(QOpenGLWidget):
         drag = self.scene.drag_display
         bounds = []
         for obj in objects:
-            b = obj.mesh.bounds() if obj.mesh_ready else None
+            b = obj.bbox()
             if b is not None:
-                # a drag or a carried pose: judge the box where the object
-                # is shown, not where the shape still is, or it could
-                # vanish mid-drag at the frustum edge
                 wm = drag.get(obj.id) if drag else None
                 if wm is not None:
                     b = _pose_box(b, wm)
@@ -2220,8 +2220,8 @@ class Viewport(QOpenGLWidget):
                 # carries: fold the whole matrix in, in float64, before the
                 # anchor and the cast; the buffers stay where they were
                 # uploaded, and the rebased draws below keep their anchor.
-                omvp = anchored(mvp @ wm, anchor)
-                oview = anchored(view @ wm, anchor)
+                omvp = anchored(mvp @ obj._transform @ wm, anchor)
+                oview = anchored(view @ obj._transform @ wm, anchor)
                 oclips = anchored_clips(clips, anchor, wm)
                 posed = True
             else:
@@ -2232,8 +2232,8 @@ class Viewport(QOpenGLWidget):
                     # object moves with it.
                     anchor = (anchor + wm[:3, 3]) if anchor is not None \
                         else np.asarray(wm[:3, 3], float)
-                omvp = flat if anchor is None else anchored(mvp, anchor)
-                oview = flat_view if anchor is None else anchored(view, anchor)
+                omvp = flat if anchor is None else anchored(mvp @ obj._transform, anchor)
+                oview = flat_view if anchor is None else anchored(view @ obj._transform, anchor)
                 oclips = anchored_clips(clips, anchor)
                 posed = False
             if clips and (anchor is not None or posed or clips_dirty):
@@ -3902,6 +3902,10 @@ class Viewport(QOpenGLWidget):
                                          px + r, py + r, w, h):
             mesh = obj.mesh
             t = drag.get(obj.id)
+            if t is not None:
+                t = t @ obj._transform
+            else:
+                t = obj._transform
             depth = np.inf
             hit = False
             if mesh.is_cloud:
@@ -4008,6 +4012,10 @@ class Viewport(QOpenGLWidget):
             if not len(mesh.edge_segments):
                 continue
             t = drag.get(obj.id)
+            if t is not None:
+                t = t @ obj._transform
+            else:
+                t = obj._transform
             segs, sub = self._near_segments(mesh, px - r, py - r,
                                             px + r, py + r, w, h, t)
             if not len(segs):
@@ -4750,7 +4758,12 @@ class Viewport(QOpenGLWidget):
                 pts = mesh.vertices
             else:
                 continue
-            scr = eye.project(pts.astype(float), w, h)
+            t = obj._transform
+            if not np.allclose(t, np.eye(4), atol=1e-12):
+                pts = pts.astype(np.float64) @ t[:3, :3].T + t[:3, 3]
+            else:
+                pts = pts.astype(np.float64)
+            scr = eye.project(pts, w, h)
             valid = scr[:, 2] > 0
             if not valid.any():
                 continue
@@ -4811,6 +4824,9 @@ class Viewport(QOpenGLWidget):
             pts = self._cv_points(obj)
             if pts is None or not len(pts):
                 continue
+            t = obj._transform
+            if not np.allclose(t, np.eye(4), atol=1e-12):
+                pts = pts.astype(np.float64) @ t[:3, :3].T + t[:3, 3]
             scr = self.camera.project(pts, w, h)
             inside = ((scr[:, 0] >= lo_x) & (scr[:, 0] <= hi_x)
                       & (scr[:, 1] >= lo_y) & (scr[:, 1] <= hi_y)
@@ -4871,8 +4887,12 @@ class Viewport(QOpenGLWidget):
                 segs, sub = self._near_segments(mesh, *rect, w, h)
                 owner = (mesh.edge_of_segment if sub is None
                          else mesh.edge_of_segment[sub])
-                scr = eye.project(segs.reshape(-1, 3).astype(float),
-                                  w, h).reshape(-1, 2, 3)
+                t = obj._transform
+                if not np.allclose(t, np.eye(4), atol=1e-12):
+                    s = segs.reshape(-1, 3).astype(np.float64) @ t[:3, :3].T + t[:3, 3]
+                else:
+                    s = segs.reshape(-1, 3).astype(np.float64)
+                scr = eye.project(s, w, h).reshape(-1, 2, 3)
                 ok = (scr[:, :, 2] > 0).all(axis=1)
                 ends_in = _inside_rect(scr[:, :, :2], rect)
                 if crossing:
@@ -4890,12 +4910,20 @@ class Viewport(QOpenGLWidget):
                 owner = (mesh.face_of_triangle if sub is None
                          else mesh.face_of_triangle[sub])
                 if sub is None:
-                    scr = eye.project(mesh.vertices.astype(float), w, h)
+                    t = obj._transform
+                    if not np.allclose(t, np.eye(4), atol=1e-12):
+                        v = mesh.vertices.astype(np.float64) @ t[:3, :3].T + t[:3, 3]
+                    else:
+                        v = mesh.vertices.astype(np.float64)
+                    scr = eye.project(v, w, h)
                     tri = scr[tris]                           # (T, 3, 3)
                 else:
                     # project only the vertices the near triangles use
                     vid, inv = np.unique(tris, return_inverse=True)
-                    scr = eye.project(mesh.vertices[vid].astype(float), w, h)
+                    v = mesh.vertices[vid].astype(np.float64)
+                    if not np.allclose(t, np.eye(4), atol=1e-12):
+                        v = v @ t[:3, :3].T + t[:3, 3]
+                    scr = eye.project(v, w, h)
                     tri = scr[inv.reshape(tris.shape)]
                 ok = (tri[:, :, 2] > 0).all(axis=1)
                 corners_in = _inside_rect(tri[:, :, :2], rect)
