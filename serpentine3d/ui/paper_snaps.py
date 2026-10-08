@@ -32,6 +32,29 @@ class PaperSnaps(SnapIndex):
     def _points(self, obj):
         return super()._points(obj) + self._features.get(obj.id, [])
 
+    def _screen_box(self, obj, camera, width, height):
+        """The page's feature points (a centre, a note's point) ride on
+        proxy shapes whose own box does not reach them, so the filter
+        would drop them. Union the features into the box."""
+        key = (id(obj), obj.mesh.uid, obj._transform.tobytes(),
+               self.revision)
+        b = self._box2d.get(key)
+        if b is None:
+            lo, hi = obj.bbox()
+            pts = [
+                (lo[0], lo[1], lo[2]), (hi[0], lo[1], lo[2]),
+                (lo[0], hi[1], lo[2]), (hi[0], hi[1], lo[2]),
+                (lo[0], lo[1], hi[2]), (hi[0], lo[1], hi[2]),
+                (lo[0], hi[1], hi[2]), (hi[0], hi[1], hi[2]),
+            ]
+            pts.extend(f[0] for f in
+                       self._features.get(obj.id, ()))
+            scr = camera.project(np.asarray(pts, float), width, height)
+            b = (float(scr[:, 0].min()), float(scr[:, 1].min()),
+                 float(scr[:, 0].max()), float(scr[:, 1].max()))
+            self._box2d[key] = b
+        return b
+
     def sync(self):
         lay = self.view.layout
         previous = self._objects

@@ -285,6 +285,7 @@ def _apparent_crossings(objects, camera, px, py, width, height,
     on_j = a3[kj] + (b3[kj] - a3[kj]) * t2[k][:, None]
     return [tuple(q) for q in np.where(first[:, None], on_i, on_j)]
 
+_BOX_SENTINEL = np.array([[1e6, 1e6, 1e6]], float)
 
 class SnapIndex:
     def __init__(self, scene, config=None):
@@ -292,6 +293,7 @@ class SnapIndex:
         self._cache: dict[str, tuple[int, list]] = {}
         self._int_cache: tuple[int, list] | None = None
         self._cloud_cache = {}
+        self._box2d: dict = {}
         self.enabled = True
         self.types = {t: t in ("end", "point", "mid", "center", "quad", "int")
                       for t in SNAP_TYPES}
@@ -311,6 +313,27 @@ class SnapIndex:
             entry = (mesh_key, _static_snap_points(obj.shape))
             self._cache[obj.id] = entry
         return entry[1]
+
+    def _screen_box(self, obj, camera, width, height):
+        """The object's projected screen box: (x0, y0, x1, y1).
+
+        Cached per (camera, pose); a move invalidates only the moved
+        object's entry.
+        """
+        key = (id(obj), obj.mesh.uid, obj._transform.tobytes())
+        b = self._box2d.get(key)
+        if b is None:
+            lo, hi = obj.bbox()
+            scr = camera.project(np.array((
+                (lo[0], lo[1], lo[2]), (hi[0], lo[1], lo[2]),
+                (lo[0], hi[1], lo[2]), (hi[0], hi[1], lo[2]),
+                (lo[0], lo[1], hi[2]), (hi[0], lo[1], hi[2]),
+                (lo[0], hi[1], hi[2]), (hi[0], hi[1], hi[2]),
+            ), float), width, height)
+            b = (float(scr[:, 0].min()), float(scr[:, 1].min()),
+                 float(scr[:, 0].max()), float(scr[:, 1].max()))
+            self._box2d[key] = b
+        return b
 
     def _intersection_points(self, objects) -> list:
         rev = self.scene.revision
@@ -419,7 +442,27 @@ class SnapIndex:
                 pts.append(p)
                 kinds.append(kind)
 
+        # A snap point sits inside its object's screen box, so an object
+        # whose box is 40px from the cursor cannot hold a point within the
+        # 12px hit radius. Only the objects near the cursor are searched:
+        # the cost stops scaling with the whole scene and grows only with
+        # what stands under the cursor. Projected boxes are cached per
+        # camera pose (a sentinel point's pixel) and object pose: the
+        # camera stands still while the mouse moves, and a move
+        # invalidates only the moved object's box.
+        sent = camera.project(_BOX_SENTINEL, width, height)[0]
+        cam_key = (float(sent[0]), float(sent[1]), float(sent[2]),
+                   width, height)
+        if self._box2d.get("cam") != cam_key:
+            self._box2d = {"cam": cam_key}
+        near: list = []
         for obj in objects:
+            x0, y0, x1, y1 = self._screen_box(obj, camera, width, height)
+            dx = max(x0 - px, 0.0, px - x1)
+            dy = max(y0 - py, 0.0, py - y1)
+            if dx * dx + dy * dy <= (radius_px + 28.0) ** 2:
+                near.append(obj)
+        for obj in near:
             if isinstance(obj.shape, PointCloudShape):
                 if self.types.get("point"):
                     p = self._cloud_point(obj, camera, px, py, width, height,
