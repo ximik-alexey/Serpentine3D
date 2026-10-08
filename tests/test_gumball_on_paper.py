@@ -8,9 +8,10 @@ meant dragging and squinting.
 
 So the sheet gets a gumball of its own: two arrows and the one plane pad that
 a sheet has, in paper millimetres, anchored on the middle of whatever is
-picked. Nothing here turns or scales because nothing on a sheet has an angle
-or a size to change — a detail frame is a rectangle with corner grips for
-that — so the handles that would lie about what they do are not drawn.
+picked. A ring turns what is picked and Shift on the pad scales it, both
+the way the rotate and scale commands do. What cannot itself turn is placed
+rather than bent: a note orbits the pivot and stays level, a detail frame
+moves at its own size, and a scaled frame keeps its drawing scale.
 """
 
 from __future__ import annotations
@@ -484,8 +485,10 @@ def test_rotation_arc_preserves_arrow_and_pad_hit_priority(sheet):
 
 
 @pytest.mark.parametrize("selection", ["detail", "note", "mixed"])
-def test_items_without_a_rotation_representation_offer_no_ring(sheet,
-                                                                selection):
+def test_every_kind_of_sheet_item_offers_the_ring(sheet, selection):
+    """What cannot itself turn is placed: a note orbits and stays level, a
+    frame moves at its own size (#36). So the ring is offered for all of
+    it, as the rotate command takes all of it."""
     _w, lv, det, note = sheet
     if selection == "detail":
         lv.selected = [("detail", det)]
@@ -494,7 +497,7 @@ def test_items_without_a_rotation_representation_offer_no_ring(sheet,
     else:
         line, _picture = _paper_geometry(sheet)
         lv.selected = [("object", line), ("note", note)]
-    assert _rotation_handle(lv, required=False) is None
+    assert _rotation_handle(lv, required=False) is not None
 
 
 def test_dragging_the_ring_rotates_geometry_live_about_its_shared_centre(
@@ -807,3 +810,244 @@ def test_the_arrows_actually_land_on_the_paper(sheet):
     near = [img.pixel(int(sx) + dx, int(sy) + dy)
             for dx in range(-2, 3) for dy in range(-2, 3)]
     assert any(p != 0xFFFFFFFF for p in near)
+
+
+# ------------------------------------------ the ring turns every kind (#36)
+
+def _mixed_pick(sheet):
+    """A note, a dimension, a hatch and the detail, all picked."""
+    from serpentine3d.core.layout import Hatch, LinearDim
+    _w, lv, det, note = sheet
+    lay = lv.layout
+    dim = LinearDim(x1=40.0, y1=120.0, x2=80.0, y2=120.0, offset=5.0)
+    hatch = Hatch(points=[[40, 150], [70, 150], [70, 170], [40, 170]],
+                  angle=30.0, spacing=2.0)
+    lay.dims.append(dim)
+    lay.hatches.append(hatch)
+    lv.selected = [("detail", det), ("note", note), ("dim", dim),
+                   ("hatch", hatch)]
+    return det, note, dim, hatch
+
+
+def _middle(kind, obj):
+    x0, y0, x1, y1 = annotation_bounds(kind, obj)
+    return np.array([(x0 + x1) / 2, (y0 + y1) / 2])
+
+
+def _turned(p, centre, degrees):
+    return _rotated(np.array([[p[0], p[1], 0.0]]), centre, degrees)[0, :2]
+
+
+def test_the_ring_turns_a_mixed_pick_live(sheet):
+    det, note, dim, hatch = _mixed_pick(sheet)
+    _w, lv, _det, _note = sheet
+    centre = np.asarray(lv.gumball.anchor(), float)
+    note_mid = _middle("note", note)
+    det_mid = (det.x + det.w / 2, det.y + det.h / 2)
+    size = (det.w, det.h)
+
+    gb, label = _turn_ring(lv, 90.0)
+
+    np.testing.assert_allclose(_middle("note", note),
+                               _turned(note_mid, centre, 90.0), atol=1e-6)
+    assert note.height == pytest.approx(5.0), "text is set level, not bent"
+    np.testing.assert_allclose((dim.x1, dim.y1),
+                               _turned((40.0, 120.0), centre, 90.0), atol=1e-6)
+    np.testing.assert_allclose((det.x + det.w / 2, det.y + det.h / 2),
+                               _turned(det_mid, centre, 90.0), atol=1e-6)
+    assert (det.w, det.h) == pytest.approx(size)
+    assert hatch.angle % 180 == pytest.approx(120.0)
+    assert "90" in label
+    gb.end_drag()
+
+
+def test_the_ring_turns_from_where_the_drag_began(sheet):
+    """Each step starts from the drag's start, so turning to 90 and back
+    to 30 leaves things at 30, not 120."""
+    _det, _note, dim, _hatch = _mixed_pick(sheet)
+    _w, lv, _det, _note = sheet
+    centre = np.asarray(lv.gumball.anchor(), float)
+    gb = lv.gumball
+    sx, sy = _rotation_handle(lv)
+    start = np.asarray(lv.screen_to_paper(sx, sy), float) - centre
+    assert gb.begin_drag(("rot", 2), sx, sy)
+    for degrees in (90.0, 30.0):
+        a = math.radians(degrees)
+        to = centre + np.array([start[0] * math.cos(a) - start[1] * math.sin(a),
+                                start[0] * math.sin(a) + start[1] * math.cos(a)])
+        gb.drag_to(*lv.paper_to_screen(*to))
+
+    np.testing.assert_allclose((dim.x1, dim.y1),
+                               _turned((40.0, 120.0), centre, 30.0), atol=1e-6)
+    gb.end_drag()
+
+
+def test_cancelling_the_ring_puts_everything_back(sheet):
+    det, note, dim, hatch = _mixed_pick(sheet)
+    _w, lv, _det, _note = sheet
+    before = (det.x, det.y, note.x, note.y, dim.x1, dim.y1, hatch.angle,
+              [list(p) for p in hatch.points])
+
+    gb, _label = _turn_ring(lv, 60.0)
+    gb.cancel_drag()
+
+    after = (det.x, det.y, note.x, note.y, dim.x1, dim.y1, hatch.angle,
+             [list(p) for p in hatch.points])
+    assert after == before
+
+
+def test_a_ring_turn_is_one_undo_step(sheet):
+    det, note, dim, _hatch = _mixed_pick(sheet)
+    w, lv, _det, _note = sheet
+    before = (det.x, det.y, note.x, dim.x1)
+
+    gb, _label = _turn_ring(lv, 45.0)
+    gb.end_drag()
+    w.history.undo()
+
+    lay = w.scene.layouts[0]
+    assert (lay.details[0].x, lay.details[0].y, lay.notes[0].x,
+            lay.dims[0].x1) == pytest.approx(before)
+
+
+def test_alt_ring_turns_copies_and_leaves_the_originals(sheet):
+    _det, note, dim, _hatch = _mixed_pick(sheet)
+    _w, lv, _det, _note = sheet
+    lay = lv.layout
+    before = (note.x, note.y, dim.x1, dim.y1)
+
+    gb, _label = _turn_ring(lv, 90.0, Qt.KeyboardModifier.AltModifier)
+    gb.end_drag()
+
+    assert (note.x, note.y, dim.x1, dim.y1) == before
+    assert len(lay.notes) == 2 and len(lay.dims) == 2
+
+
+# ------------------------------------ Shift-pad scales every kind (#36)
+
+def _shift_pad(lv, factor, modifiers=None):
+    """Shift-drag the pad out to `factor` times its distance from the anchor."""
+    gb = lv.gumball
+    shift = Qt.KeyboardModifier.ShiftModifier
+    held = shift if modifiers is None else shift | modifiers
+    sx, sy = _handle(lv, "pad", 2)
+    anchor = np.asarray(gb.anchor(), float)
+    start = np.asarray(lv.screen_to_paper(sx, sy), float)
+    assert gb.begin_drag(("pad", 2), sx, sy, held)
+    label = gb.drag_to(*lv.paper_to_screen(*(anchor + (start - anchor)
+                                               * factor)), held)
+    return gb, label
+
+
+def _grown(p, centre, factor):
+    return np.asarray(centre, float) + (np.asarray(p, float) - centre) * factor
+
+
+def test_shift_on_the_pad_scales_a_mixed_pick_live(sheet):
+    det, note, dim, hatch = _mixed_pick(sheet)
+    _w, lv, _det, _note = sheet
+    centre = np.asarray(lv.gumball.anchor(), float)
+    frame_middle = (det.x + det.w / 2, det.y + det.h / 2)
+    frame_size = (det.w, det.h)
+    drawing_scale = det.scale_denom
+    note_middle = _middle("note", note)
+    height = note.height
+    offset = dim.offset
+    spacing, angle = hatch.spacing, hatch.angle
+    corners = [list(p) for p in hatch.points]
+    lv._hlr_cache[det.id] = "stale picture"
+
+    gb, label = _shift_pad(lv, 2.0)
+
+    assert label == "2.000x"
+    np.testing.assert_allclose((det.x + det.w / 2, det.y + det.h / 2),
+                               _grown(frame_middle, centre, 2.0), atol=1e-6)
+    assert (det.w, det.h) == pytest.approx((frame_size[0] * 2,
+                                            frame_size[1] * 2))
+    assert det.scale_denom == drawing_scale
+    assert det.id not in lv._hlr_cache
+    np.testing.assert_allclose(_middle("note", note),
+                               _grown(note_middle, centre, 2.0), atol=1e-6)
+    assert note.height == pytest.approx(height * 2)
+    np.testing.assert_allclose((dim.x1, dim.y1),
+                               _grown((40.0, 120.0), centre, 2.0), atol=1e-6)
+    np.testing.assert_allclose((dim.x2, dim.y2),
+                               _grown((80.0, 120.0), centre, 2.0), atol=1e-6)
+    assert dim.offset == pytest.approx(offset * 2)
+    np.testing.assert_allclose(hatch.points,
+                               [_grown(p, centre, 2.0) for p in corners],
+                               atol=1e-6)
+    assert hatch.spacing == pytest.approx(spacing * 2)
+    assert hatch.angle == pytest.approx(angle)
+    gb.end_drag()
+
+
+def test_shift_on_the_pad_scales_from_where_the_drag_began(sheet):
+    """Out to 3 then back to 1.5 leaves things at 1.5, not 4.5."""
+    _det, _note, dim, _hatch = _mixed_pick(sheet)
+    _w, lv, _det, _note = sheet
+    centre = np.asarray(lv.gumball.anchor(), float)
+    gb = lv.gumball
+    sx, sy = _handle(lv, "pad", 2)
+    start = np.asarray(lv.screen_to_paper(sx, sy), float)
+    shift = Qt.KeyboardModifier.ShiftModifier
+    assert gb.begin_drag(("pad", 2), sx, sy, shift)
+    for factor in (3.0, 1.5):
+        gb.drag_to(*lv.paper_to_screen(*_grown(start, centre, factor)),
+                   shift)
+    np.testing.assert_allclose((dim.x1, dim.y1),
+                               _grown((40.0, 120.0), centre, 1.5), atol=1e-6)
+    assert dim.offset == pytest.approx(5.0 * 1.5)
+    gb.end_drag()
+
+
+def test_cancelling_a_shift_pad_scale_puts_everything_back(sheet):
+    det, note, dim, hatch = _mixed_pick(sheet)
+    _w, lv, _det, _note = sheet
+    before = (det.x, det.y, det.w, det.h, note.x, note.y, note.height,
+              dim.x1, dim.y1, dim.offset, hatch.spacing,
+              [list(p) for p in hatch.points])
+    gb, _label = _shift_pad(lv, 2.5)
+    gb.cancel_drag()
+    after = (det.x, det.y, det.w, det.h, note.x, note.y, note.height,
+             dim.x1, dim.y1, dim.offset, hatch.spacing,
+             [list(p) for p in hatch.points])
+    assert after == before
+
+
+def test_a_shift_pad_scale_is_one_undo_step(sheet):
+    det, note, dim, _hatch = _mixed_pick(sheet)
+    w, lv, _det, _note = sheet
+    before = (det.w, note.height, dim.x1, dim.offset)
+    gb, _label = _shift_pad(lv, 2.0)
+    gb.end_drag()
+    assert det.w != pytest.approx(before[0])
+    w.history.undo()
+    lay = w.scene.layouts[0]
+    assert (lay.details[0].w, lay.notes[0].height, lay.dims[0].x1,
+            lay.dims[0].offset) == pytest.approx(before)
+
+
+def test_alt_shift_on_the_pad_scales_copies_and_leaves_the_originals(sheet):
+    _det, note, dim, _hatch = _mixed_pick(sheet)
+    _w, lv, _det, _note = sheet
+    lay = lv.layout
+    before = (note.height, dim.x1, dim.offset)
+    gb, _label = _shift_pad(lv, 2.0, Qt.KeyboardModifier.AltModifier)
+    gb.end_drag()
+    assert (note.height, dim.x1, dim.offset) == before
+    assert len(lay.notes) == 2 and len(lay.dims) == 2
+    copy_dim = next(d for d in lay.dims if d is not dim)
+    assert copy_dim.offset == pytest.approx(dim.offset * 2)
+
+
+def test_shift_on_the_pad_leaves_a_locked_detail_where_it_is(sheet):
+    det, note, _dim, _hatch = _mixed_pick(sheet)
+    _w, lv, _det, _note = sheet
+    det.locked = True
+    frame = (det.x, det.y, det.w, det.h)
+    height = note.height
+    gb, _label = _shift_pad(lv, 2.0)
+    gb.end_drag()
+    assert (det.x, det.y, det.w, det.h) == frame
+    assert note.height == pytest.approx(height * 2)

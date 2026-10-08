@@ -52,6 +52,7 @@ class PointReq(Req):
     number_from: object = None            # (base, dir) or point-fn: '10' ->
                                           # base+10*dir / number_from(10.0)
     allow_number: bool = False            # bare number returns the float
+    option_changed: object = None         # update constraints before notifying
 
 
 def frame_sides(corner, cplane):
@@ -144,11 +145,16 @@ def has_text_editor(ctx):
     return processor is not None and not processor.headless
 
 
+# the most answers a question shows as chips to click
+MAX_ANSWER_CHIPS = 10
+
+
 @dataclass
 class OptionReq(Req):
     prompt: str
     options: list[str] = field(default_factory=list)
     default: str | None = None
+    preview_fn: object = None             # option -> ghost, shown while asked
 
 
 @dataclass
@@ -161,6 +167,10 @@ class SelectReq(Req):
     choices: dict | None = None
     preview_fn: object = None
     accept: object = None                 # callable(obj) -> bool, extra filter
+    # Ask for where on the object a click landed, as well as which object:
+    # trim takes the part that point is on (#31). A viewport click supplies
+    # it; a typed, scripted or listed pick cannot, and leaves it out.
+    want_point: bool = False
 
 
 def _kinds_phrase(kinds: tuple) -> str:
@@ -258,6 +268,9 @@ class CommandContext:
         self.last_point: Point | None = None
         self._echo_fns: list = []
         self.result_ids: list[str] = []
+        # object id -> the world point a click landed on it, for the current
+        # selection prompt only (see SelectReq.want_point)
+        self.pick_points: dict = {}
         self.result_subobjects: list = []
         # set by the replay engine: the plane and aim a headless replay
         # answers with, standing in for the viewport that recorded them
@@ -556,6 +569,10 @@ def parse_value(req: Req, text: str, ctx: CommandContext):
         for opt in req.extra_options:
             if text and opt.lower().startswith(text.lower()):
                 return True, opt
+        # Zero abbreviates absolute world coordinates at a position prompt.
+        # Prompts measuring a dimension or factor keep their numeric zero.
+        if text == "0" and req.number_from is None and not req.allow_number:
+            return True, (0.0, 0.0, 0.0)
         pt = parse_point(text, ctx.last_point, ctx.scene.units, ctx.cplane)
         # A command that runs along an axis of its own says so; failing
         # that, Tab lets you aim one by hand, and failing that the cursor is
@@ -689,13 +706,15 @@ class CommandProcessor:
             self.cancel()
         # macro form: 'osnap mid toggle' — first token is the command,
         # the rest answer its prompts; aliases may expand to macros too
-        tokens = name.split()
-        name = tokens[0] if tokens else name
+        # Rhino shortcut presets may prefix an invocation with ! and its
+        # command word with _. Keep those markers out of argument text.
+        tokens = name.strip().removeprefix("!").split()
+        name = tokens[0].removeprefix("_") if tokens else name
         args = tokens[1:]
         alias_target = _ALIASES.get(name.lower().strip())
-        if alias_target and " " in alias_target:
-            expanded = alias_target.split()
-            name = expanded[0]
+        if alias_target:
+            expanded = alias_target.removeprefix("!").split()
+            name = expanded[0].removeprefix("_") if expanded else alias_target
             args = expanded[1:] + args
         self.headless = any(arg.lower() == "--headless" for arg in args)
         args = [arg for arg in args if arg.lower() != "--headless"]
@@ -779,6 +798,7 @@ class CommandProcessor:
             return
         if isinstance(req, SelectReq):
             self._select_buffer = []
+            self.ctx.pick_points = {}
             if (req.allow_preselected and self.ctx.selection.ids):
                 held = self.ctx.selection.objects()
                 pre = [o.id for o in held
@@ -901,6 +921,9 @@ class CommandProcessor:
                         return False
                     value = matches[0]
                 self.command_options[opt_name] = value
+                changed = getattr(req, "option_changed", None)
+                if changed is not None:
+                    changed()
                 if self.journal is not None:
                     self.journal.option(opt_name, value)
                 self.ctx.echo(f"{opt_name}={value}")
@@ -912,13 +935,27 @@ class CommandProcessor:
         req = self.request
         if req is None or not getattr(req, "choices", None):
             return False
-        text = text.strip()
+        # Only option identifiers accept the Rhino _ marker. If this is
+        # not an option, provide_text still parses the original argument.
+        text = text.strip().removeprefix("_")
+        if not text:
+            return False
         if "=" in text:
             name, _, value = text.partition("=")
             return self.set_option(name.strip(), value.strip())
-        for opt_name in req.choices:
-            if opt_name.lower() == text.lower():
-                return self.set_option(opt_name)
+        matches = [name for name in req.choices
+                   if name.lower().startswith(text.lower())]
+        exact = next((name for name in matches
+                      if name.lower() == text.lower()), None)
+        if exact is not None:
+            return self.set_option(exact)
+        # Construction keywords already accept abbreviations. Let their
+        # existing parser answer the prompt when a chip shares that prefix.
+        if any(word.lower().startswith(text.lower())
+               for word in getattr(req, "extra_options", ())):
+            return False
+        if len(matches) == 1:
+            return self.set_option(matches[0])
         return False
 
     def option(self, name: str, default: str) -> str:
@@ -947,6 +984,11 @@ class CommandProcessor:
         """Feed typed text for the current request."""
         if not self.busy or self.request is None:
             return
+        # A leading ! can launch a shortcut from a pending command prompt;
+        # names, paths and other literal text answers keep the character.
+        if text.lstrip().startswith("!") and not isinstance(self.request, TextReq):
+            self.run(text)
+            return
         if text.strip() and self._try_option_text(text):
             return
         req = self.request
@@ -968,7 +1010,9 @@ class CommandProcessor:
             return False
         return req.accept is None or bool(req.accept(obj))
 
-    def click_object(self, obj_id: str):
+    def click_object(self, obj_id: str, at=None):
+        """Pick an object for the current selection prompt. `at` is where
+        on it the click landed, when the pick came from a viewport."""
         req = self.request
         if not isinstance(req, SelectReq):
             return
@@ -976,6 +1020,8 @@ class CommandProcessor:
         if obj is None or not self._matching(obj, req):
             self.ctx.echo("Object type not accepted here.")
             return
+        if at is not None:
+            self.ctx.pick_points[obj_id] = tuple(float(v) for v in at)
         if obj_id in self._select_buffer:
             self._select_buffer.remove(obj_id)
         else:
@@ -1076,7 +1122,20 @@ class CommandProcessor:
         the same as typing it.
         """
         req = self.request
+        if isinstance(req, OptionReq):
+            # a question's answers, the way Rhino puts them on its command
+            # line to click; a long list (every block, every layout) is one
+            # to type from, not a row of buttons
+            return (list(req.options)
+                    if len(req.options) <= MAX_ANSWER_CHIPS else [])
         return list(getattr(req, "extra_options", ()) or ())
+
+    def keyword_default(self):
+        """The keyword chip Enter would give, to mark as the default."""
+        req = self.request
+        if isinstance(req, OptionReq) and req.default in self.keyword_chips():
+            return req.default
+        return None
 
     def option_chips(self) -> list:
         """[(name, current_value)] for the active request's options."""

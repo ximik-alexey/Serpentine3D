@@ -24,8 +24,8 @@ import numpy as np
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QBrush, QColor, QPen, QPolygonF
 
-from ..core.layout import (annotation_bounds, copy_sheet_item, move_sheet_item,
-                           note_text_height, sheet_item_bounds, sheet_pools)
+from ..core.layout import (copy_sheet_item, move_sheet_item,
+                           sheet_item_bounds, sheet_pools)
 from .gumball import (
     ARC_R, AXIS_COLORS, CONE1, HOVER_COLOR, PAD0, PAD1, PAD_ALPHA, SHAFT0,
     SIZE_PX, _alt_held,
@@ -130,9 +130,14 @@ class PaperGumball:
                 at[1] + (s if axis == Y else 0.0))
 
     def _can_rotate(self) -> bool:
-        """Whether every selected item has paper-plane geometry to turn."""
-        picks = self._picks()
-        return bool(picks) and all(kind == "object" for kind, _obj in picks)
+        """Whether there is anything picked the ring could turn.
+
+        Everything a sheet holds can be turned (#36): what cannot itself
+        take an angle is placed, a note orbiting and staying level, a frame
+        moving at its own size. Only a locked frame stays, and `_picks`
+        has already left it out.
+        """
+        return bool(self._picks())
 
     def hit_test(self, px: float, py: float):
         if not self.active():
@@ -200,25 +205,15 @@ class PaperGumball:
                 self.lv.selected = list(copies)
                 self.vp.layoutSelectionChanged.emit()
                 self.vp.scene.notify("layouts")
-        scaling_items = (modifiers is not None
-                         and _shift_held(modifiers)
-                         and handle[0] == "pad"
-                         and all(kind in ("note", "object")
-                                 for kind, _obj in picks))
-        note_originals = []
-        object_originals = []
-        if scaling_items:
-            for kind, obj in picks:
-                if kind == "note":
-                    note_originals.append((
-                        obj,
-                        copy.deepcopy(vars(obj)),
-                        annotation_bounds("note", obj, self.vp.scene),
-                    ))
-                else:
-                    object_originals.append((obj, obj.shape))
-        rotation_originals = ([(obj, obj.shape) for _kind, obj in picks]
-                              if rotating else [])
+        scaling = (modifiers is not None and _shift_held(modifiers)
+                   and handle[0] == "pad")
+        # every pick as it was at the press, so each step of a turn or a
+        # scale works from there: a shape for paper geometry, the fields
+        # for the rest
+        originals = ([(kind, obj, obj.shape if kind == "object"
+                       else copy.deepcopy(vars(obj)))
+                      for kind, obj in picks]
+                     if rotating or scaling else [])
         self.drag = {
             "handle": handle,
             "anchor": at,
@@ -228,10 +223,9 @@ class PaperGumball:
             "start": self.lv.screen_to_paper(px, py),
             "offset": (0.0, 0.0),
             "scale": 1.0,
-            "scaling": scaling_items,
-            "note_originals": note_originals,
-            "object_originals": object_originals,
-            "rotation_originals": rotation_originals,
+            "scaling": scaling,
+            "rotating": rotating,
+            "originals": originals,
             "angle": 0.0,
             "typed": "",
             "armed": False,
@@ -276,54 +270,42 @@ class PaperGumball:
             angle = round(angle / 15.0) * 15.0
         return angle
 
-    def _rotate_items_to(self, angle: float):
-        """Rotate paper objects from their drag-start shapes."""
-        from ..core import geometry
-        d = self.drag
-        anchor = d["anchor"]
-        centre = (float(anchor[0]), float(anchor[1]), 0.0)
-        for obj, shape in d["rotation_originals"]:
-            obj.shape = geometry.rotate(shape, centre, (0.0, 0.0, 1.0),
-                                        angle)
-        d["angle"] = float(angle)
-        self.vp.scene.notify("layouts")
-
-    def _scale_items_to(self, factor: float):
-        """Scale supported sheet items from their drag-start state."""
+    def _transform_items_to(self, linear, size: float = 1.0):
+        """Put everything picked through `linear` about the anchor, from its
+        drag-start state, the way the rotate and scale commands do (see
+        `transform_sheet_item`); `size` is what text heights, dimension
+        offsets and hatch spacings are multiplied by."""
+        from ..core.layout import transform_sheet_item
         d = self.drag
         anchor = np.asarray(d["anchor"], float)
-        for note, state, bounds in d["note_originals"]:
-            note.__dict__.clear()
-            note.__dict__.update(copy.deepcopy(state))
-            if abs(factor - 1.0) < 1e-12:
-                continue
-
-            x0, y0, x1, y1 = bounds
-            old_centre = np.asarray(((x0 + x1) / 2, (y0 + y1) / 2),
-                                    float)
-            wanted_centre = anchor + (old_centre - anchor) * factor
-
-            # A named annotation style owns the effective height. Scaling is
-            # an explicit per-note edit, so preserve its rendered size as the
-            # new local height and detach it from that shared style.
-            height = note_text_height(note, self.vp.scene)
-            note.style = ""
-            note.height = height * factor
-            bx0, by0, bx1, by1 = annotation_bounds(
-                "note", note, self.vp.scene)
-            new_centre = np.asarray(((bx0 + bx1) / 2, (by0 + by1) / 2),
-                                    float)
-            note.x += float(wanted_centre[0] - new_centre[0])
-            note.y += float(wanted_centre[1] - new_centre[1])
-        if d["object_originals"]:
-            from ..core import geometry
-            centre = (float(anchor[0]), float(anchor[1]), 0.0)
-            factors = (factor, factor, 1.0)
-            for obj, shape in d["object_originals"]:
-                obj.shape = geometry.scale(
-                    shape, centre, factor, factors=factors)
-        d["scale"] = factor
+        matrix = np.eye(3)
+        matrix[:2, :2] = linear
+        matrix[:2, 2] = anchor - linear @ anchor
+        still = np.allclose(linear, np.eye(2), atol=1e-12)
+        for kind, obj, state in d["originals"]:
+            if kind == "object":
+                obj.shape = state
+            else:
+                obj.__dict__.clear()
+                obj.__dict__.update(copy.deepcopy(state))
+            if not still:
+                transform_sheet_item(kind, obj, matrix, size, self.vp.scene)
+            if kind == "detail":
+                self.lv._hlr_cache.pop(obj.id, None)
         self.vp.scene.notify("layouts")
+
+    def _rotate_items_to(self, angle: float):
+        """Turn everything picked `angle` degrees about the anchor."""
+        import math
+        a = math.radians(angle)
+        self._transform_items_to(np.array([[math.cos(a), -math.sin(a)],
+                                           [math.sin(a), math.cos(a)]]))
+        self.drag["angle"] = float(angle)
+
+    def _scale_items_to(self, factor: float):
+        """Scale everything picked `factor` times about the anchor."""
+        self._transform_items_to(np.eye(2) * factor, factor)
+        self.drag["scale"] = float(factor)
 
     def _move_to(self, offset: tuple):
         """Put the selection at `offset` from where the drag found it.
@@ -348,7 +330,7 @@ class PaperGumball:
         if self.drag["typed"]:
             return self.drag["last_label"]
         self.drag["armed"] = False
-        if self.drag["rotation_originals"]:
+        if self.drag["rotating"]:
             angle = self._wanted_angle(px, py, modifiers)
             self._rotate_items_to(angle)
             label = f"rotate {angle:.1f}\N{DEGREE SIGN}"
@@ -370,7 +352,7 @@ class PaperGumball:
         d = self.drag
         if d is None:
             return
-        if d["rotation_originals"]:
+        if d["rotating"]:
             moved = abs(d["angle"]) >= 1e-9
         elif d["scaling"]:
             moved = abs(d["scale"] - 1.0) >= 1e-9
@@ -476,7 +458,7 @@ class PaperGumball:
         if self.drag is None:
             return
         d = self.drag
-        if d["rotation_originals"]:
+        if d["rotating"]:
             self._rotate_items_to(0.0)
         elif d["scaling"]:
             self._scale_items_to(1.0)

@@ -21,6 +21,7 @@ IMPORT_FORMATS = [
     ("SVG", (".svg",)),
     ("PLY point cloud", (".ply",)),
     ("E57 point cloud", (".e57",)),
+    ("SketchUp", (".skp",)),
 ]
 
 EXPORT_FORMATS = [
@@ -116,21 +117,37 @@ def rhino_version_from_filter(name_filter: str) -> int:
     return 8
 
 
+def _filter_exts(name_filter: str) -> set:
+    """Every extension a name filter lists, with its dot:
+    "Images (*.png *.jpg)" -> {".png", ".jpg"}."""
+    _, _, globs = name_filter.partition("(")
+    return {g[1:].lower() for g in globs.rstrip(")").split()
+            if g.startswith("*.")}
+
+
 def ensure_suffix(path: str, name_filter: str) -> str:
     """Give a saved path an extension when the user typed none, so a bare
     "part" saves as the format they picked instead of failing to dispatch. A
-    typed extension we can actually write wins over the dropdown; anything
-    else ("my.part") keeps its text and gains the chosen suffix."""
+    typed extension we can actually write wins over the dropdown, and so does
+    one the chosen filter itself names: a command's own chooser, PDF or SVG
+    or a video, writes formats Export does not, and "sheets.pdf" came back
+    as "sheets.pdf.pdf" (#39). Anything else ("my.part") keeps its text and
+    gains the chosen suffix."""
     suffix = suffix_for_filter(name_filter)
     if not suffix:
         return path
-    if os.path.splitext(path)[1].lower() in EXPORT_EXTS:
+    ext = os.path.splitext(path)[1].lower()
+    if ext in EXPORT_EXTS or ext in _filter_exts(name_filter):
         return path
     return f"{path}.{suffix}"
 
 
-def import_file(scene, path: str, progress=None) -> int:
+def import_file(scene, path: str, progress=None, *, replace: bool = False) -> int:
     """Import any supported file into the scene. Returns object count added.
+
+    A .serp is added to what is there, like every other format, unless
+    `replace` is set: that is Open, which swaps the scene for the file's.
+    Other formats always add; Open on one of them adds too, as it always has.
 
     `progress` is called as `progress(fraction, message)` while the work runs;
     answering False cancels it, raising `Cancelled`. E57 and Rhino report as
@@ -144,13 +161,15 @@ def import_file(scene, path: str, progress=None) -> int:
     # answer a change by reading the whole scene made a big import cost
     # objects squared — see Scene.batched.
     with scene.batched():
-        n = _import_file(scene, path, ext, report)
+        n = _import_file(scene, path, ext, report, replace)
     report.done()
     return n
 
 
-def _import_file(scene, path: str, ext: str, report) -> int:
+def _import_file(scene, path: str, ext: str, report, replace: bool = False) -> int:
     if ext == ".serp":
+        if not replace:
+            return native.merge_scene(scene, path)
         native.load_scene(scene, path)
         return len(scene.all())
     if ext in (".step", ".stp"):
@@ -203,27 +222,42 @@ def _import_file(scene, path: str, ext: str, report) -> int:
     if ext == ".3dm":
         from . import rhino
         items = rhino.import_3dm(path, progress=report.part(0.0, 0.95))
-        # Adding is the last stretch and it is not free. The bar used to stop
-        # wherever the converter left it and sit there while thousands of
-        # objects went into the scene, which read as a hang at 98%.
-        adding = report.part(0.95, 1.0)
-        count = len(items) or 1
-        layer_map = {}
-        for done, (name, shape, meta) in enumerate(items, 1):
-            layer_id = _layer_for(scene, meta, layer_map)
-            # Not `obj`: that name is the .obj importer, one branch above.
-            added = scene.add(shape, name=name, layer_id=layer_id)
-            # An override only: leaving it None keeps the object following its
-            # layer, the way it does in Rhino.
-            if meta.get("color"):
-                added.color = meta["color"]
-            if meta.get("material"):
-                added.material = dict(meta["material"])
-            if not meta.get("visible", True):
-                added.visible = False
-            adding.tick(done / count, f"Adding object {done} of {count}")
-        return len(items)
+        return _add_items(scene, items, report.part(0.95, 1.0))
+    if ext == ".skp":
+        from . import skp
+        items = skp.import_skp(path, units=scene.units,
+                               progress=report.part(0.0, 0.95))
+        return _add_items(scene, items, report.part(0.95, 1.0))
     raise ValueError(f"Unsupported import format: {ext}")
+
+
+def _add_items(scene, items: list, adding) -> int:
+    """Put an importer's (name, shape, meta) into the scene, each on its
+    layer, made where the file names one this scene lacks.
+
+    Adding is the last stretch and it is not free. The bar used to stop
+    wherever the converter left it and sit there while thousands of
+    objects went into the scene, which read as a hang at 98%.
+    """
+    count = len(items) or 1
+    layer_map = {}
+    for done, (name, shape, meta) in enumerate(items, 1):
+        layer_id = _layer_for(scene, meta, layer_map)
+        added = scene.add(shape, name=name, layer_id=layer_id)
+        # An override only: leaving it None keeps the object following its
+        # layer, the way it does in Rhino.
+        if meta.get("color"):
+            added.color = meta["color"]
+        if meta.get("material"):
+            added.material = dict(meta["material"])
+        if not meta.get("visible", True):
+            added.visible = False
+        if meta.get("group"):
+            # what the file held together stays together: clicking one
+            # selects them all, as the group command's own ids do
+            added.group_id = meta["group"]
+        adding.tick(done / count, f"Adding object {done} of {count}")
+    return len(items)
 
 
 def _layer_for(scene, meta: dict, made: dict) -> str | None:

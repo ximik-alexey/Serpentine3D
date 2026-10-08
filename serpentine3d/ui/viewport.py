@@ -10,9 +10,10 @@ import time
 import traceback
 
 import numpy as np
+import shiboken6
 from OpenGL import GL
 from PySide6.QtCore import QPoint, QTimer, Qt, Signal
-from PySide6.QtGui import QCursor
+from PySide6.QtGui import QCursor, QOpenGLContext
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -208,8 +209,13 @@ uniform float uCurvRange;   // >0 enables curvature false-colour
 uniform int uRendered;      // 1 = environment-lit rendered mode
 uniform float uMetallic;
 uniform float uRoughness;
+uniform int uFlat;          // 1 = a flat mark (a solid hatch): no lighting
 out vec4 frag;
 void main() {
+    if (uFlat == 1) {
+        frag = vec4(uColor, uAlpha);
+        return;
+    }
     vec3 n = normalize(vNormal);
     if (!gl_FrontFacing) n = -n;
     vec3 l = normalize(-vPosView);
@@ -577,8 +583,8 @@ def clip_equation(origin, normal):
 
     It keeps what comes out positive, and the half behind the normal is the
     half that comes out positive, so the normal is the direction things
-    disappear in. The arrow drawn on the plane is that same normal, which is
-    why the two cannot end up telling different stories.
+    disappear in. The direction indicator points the opposite way, toward
+    the visible half, matching Rhino's clipping plane convention.
     """
     n = np.asarray(normal, float)
     o = np.asarray(origin, float)
@@ -602,7 +608,7 @@ def clip_normal_arrows(frames, camera, width, height):
         if not here:
             continue
         at = np.array([f[0] for f in here], float)
-        dirs = np.array([f[1] for f in here], float)
+        dirs = -np.array([f[1] for f in here], float)
         length = cv_marker_size(at, camera, width, height, CLIP_ARROW_PX)
         passes.append((arrow_segments(at, dirs, fwd, right, length),
                        theme.CLIP_NORMAL if enabled
@@ -695,6 +701,27 @@ def cloud_level_budget(counts: list, budget: int) -> int:
     return 0
 
 
+_deferred_buffer_deletes = {}
+
+
+def _current_share_group():
+    context = QOpenGLContext.currentContext()
+    return context.shareGroup() if context is not None else None
+
+
+def _flush_buffer_deletes():
+    """Delete retired buffers only in the group that owns their names."""
+    if not _deferred_buffer_deletes:
+        return
+    for group in list(_deferred_buffer_deletes):
+        if not shiboken6.isValid(group):
+            # Destroying the group already freed its OpenGL resources.
+            del _deferred_buffer_deletes[group]
+    buffers = _deferred_buffer_deletes.pop(_current_share_group(), [])
+    if buffers:
+        GL.glDeleteBuffers(len(buffers), buffers)
+
+
 class _MeshBuffers:
     """One mesh's vertex data on the GPU, shared by every viewport.
 
@@ -705,6 +732,7 @@ class _MeshBuffers:
     """
 
     def __init__(self, mesh, dash=None):
+        self._share_group = _current_share_group()
         self.tri_vbo = self.tri_ebo = self.tri_count = 0
         self.line_vbo = self.line_count = 0
         self.thick_vbo = self.thick_ebo = self.thick_count = 0
@@ -761,7 +789,14 @@ class _MeshBuffers:
 
     def release(self):
         if self._buffers:
-            GL.glDeleteBuffers(len(self._buffers), self._buffers)
+            if self._share_group == _current_share_group():
+                GL.glDeleteBuffers(len(self._buffers), self._buffers)
+            elif shiboken6.isValid(self._share_group):
+                # A context-destruction callback may run while another
+                # group's context is current. The same numeric ids there
+                # name different buffers; wait for the owner to draw again.
+                _deferred_buffer_deletes.setdefault(
+                    self._share_group, []).extend(self._buffers)
         self._buffers = []
         self.nbytes = 0
 
@@ -775,7 +810,10 @@ class _GpuObject:
         # have been freed, and an address gets recycled. See DisplayMesh.uid.
         self.mesh_key = mesh.uid
         self.dash_key = dash_key                  # linetype identity for cache
-        self._share_key = (mesh.uid, dash_key)
+        # Sharing is a property of a context group, not of the whole process.
+        # An embedded host or a recreated window can have a separate group.
+        # Reusing another group's buffer ids can crash a native GL driver.
+        self._share_key = (_current_share_group(), mesh.uid, dash_key)
         self.buffers = gpu_share.acquire(
             self._share_key, lambda: _MeshBuffers(mesh, dash))
         buf = self.buffers
@@ -1026,6 +1064,7 @@ class Viewport(QOpenGLWidget):
         # what the running command's points mean: "model" coordinates or
         # "paper" millimetres. Only a sheet can tell the two apart.
         self.point_space = "model"
+        self.last_click_px = None           # pixel of the last object click
         self.frame_aspect = None            # cinema frame guide (e.g. 2.39)
         self.grid_snap = bool(config.get("grid_snap")) if config else False
         self.grid_snap_step = (float(config.get("grid_snap_step",
@@ -1250,6 +1289,8 @@ class Viewport(QOpenGLWidget):
             self._paint_frame()
         except Exception:                                       # noqa: BLE001
             self._paint_failed = True
+            from ..utils.crash_log import record_exception
+            record_exception()
             traceback.print_exc()
             print("serp3d: this viewport has stopped drawing after the "
                   "error above. Redocking it, or reopening the window, "
@@ -1323,9 +1364,9 @@ class Viewport(QOpenGLWidget):
 
         if self.grid_visible:
             self._draw_grid(mvp64)
-        self._draw_image_planes(mvp)
         self._sync_gpu()
         self._draw_objects(mvp64, view)
+        self._draw_image_planes(mvp)
         self._draw_pending(mvp)
         self._draw_control_points(mvp)
         self._draw_combs(mvp)
@@ -1770,6 +1811,16 @@ class Viewport(QOpenGLWidget):
         return self._image_textures[cache_key]
 
     def _draw_image_planes(self, mvp):
+        """Pictures in the model, drawn after the objects and depth-tested.
+
+        Drawn first, with depth writes off, a picture was an underlay: any
+        surface behind it painted over it, so a graphic hung a few millimetres
+        in front of a wall could not be seen at all. Drawn after, the wall
+        loses and whatever stands in front of the picture still hides it. The
+        picture sits a hair back in depth (see _draw_pictures), so a curve
+        traced on its own plane still shows on top of it.
+        """
+        GL.glEnable(GL.GL_DEPTH_TEST)
         from ..core.picture import PictureShape
         pictures = [obj.shape for obj in self.scene.visible_objects()
                     if obj.kind == "picture"]
@@ -1807,7 +1858,10 @@ class Viewport(QOpenGLWidget):
             GL.glBufferData(GL.GL_ARRAY_BUFFER, quad.nbytes, quad,
                             GL.GL_DYNAMIC_DRAW)
             GL.glDepthMask(False)
+            GL.glEnable(GL.GL_POLYGON_OFFSET_FILL)
+            GL.glPolygonOffset(1.0, 1.0)
             GL.glDrawArrays(GL.GL_TRIANGLES, 0, len(quad))
+            GL.glDisable(GL.GL_POLYGON_OFFSET_FILL)
             GL.glDepthMask(True)
 
     def _draw_grid(self, mvp):
@@ -1960,6 +2014,7 @@ class Viewport(QOpenGLWidget):
         - a background tessellation finishing, which makes an object drawable
           with no change to the scene at all.
         """
+        _flush_buffer_deletes()
         key = self._gpu_sync_key()
         if self._gpu_synced == key:
             return
@@ -2137,6 +2192,18 @@ class Viewport(QOpenGLWidget):
 
     def _draw_objects(self, mvp, view, mode_override=None,
                       light_background=False):
+        clips = self._clip_vectors() if self.space == "model" else []
+        try:
+            self._draw_objects_with_clips(mvp, view, clips, mode_override,
+                                          light_background)
+        finally:
+            # Qt also draws in this context. Leaving clip distances enabled
+            # after a failed upload makes its shaders' unwritten distances
+            # undefined, so release them even when an object cannot draw.
+            self._end_clips(clips)
+
+    def _draw_objects_with_clips(self, mvp, view, clips, mode_override=None,
+                                light_background=False):
         # The matrices arrive float64 and stay that way until each
         # object's anchor is folded in: the fold is the whole fix for
         # far geometry swimming, and it only works before the cast.
@@ -2156,7 +2223,6 @@ class Viewport(QOpenGLWidget):
         # keep insertion order (unchanged default behaviour).
         objects = sorted(self.scene.visible_objects(),
                          key=lambda o: -getattr(o, "draw_order", 0))
-        clips = self._clip_vectors() if self.space == "model" else []
         clips_dirty = False           # True while anchored clips are bound
         for i in range(len(clips)):
             GL.glEnable(GL.GL_CLIP_DISTANCE0 + i)
@@ -2274,6 +2340,10 @@ class Viewport(QOpenGLWidget):
 
             if obj.kind == "picture":
                 fill_alpha_obj = 0.0
+            elif obj.kind == "hatch":
+                # a hatch is a mark on the drawing, filled whatever the
+                # display mode, as Rhino draws a solid one in wireframe
+                fill_alpha_obj = 1.0
             elif obj.clip_plane is not None:
                 fill_alpha_obj = 0.18
             elif ghosted_obj:
@@ -2284,9 +2354,14 @@ class Viewport(QOpenGLWidget):
                 self._use(self._mesh_prog)
                 self._set_mvp(self._mesh_prog, omvp)
                 self._set_view(self._mesh_prog, oview)
+                # A solid hatch is a flat fill in its own colour, as a
+                # drawing shows one: lit, a flat disc read as a ball (#33).
+                flat_fill = obj.kind == "hatch"   # `flat` is the MVP here
+                GL.glUniform1i(self._uloc(self._mesh_prog, "uFlat"),
+                               1 if flat_fill else 0)
                 GL.glUniform3f(
                     self._uloc(self._mesh_prog, "uColor"),
-                    *fill_color)
+                    *(line_color if flat_fill else fill_color))
                 GL.glUniform1f(
                     self._uloc(self._mesh_prog, "uAlpha"),
                     fill_alpha_obj)
@@ -2320,7 +2395,7 @@ class Viewport(QOpenGLWidget):
             if gpu.line_count and (selected or show_edges or not gpu.tri_count):
                 if selected:
                     edge_color = (*theme.SELECTION_COLOR, 1.0)
-                elif obj.kind == "curve":
+                elif obj.kind in ("curve", "hatch"):
                     edge_color = (*line_color, 1.0)
                 else:
                     # face edges: darkened object colour
@@ -2387,7 +2462,6 @@ class Viewport(QOpenGLWidget):
                                          (*line_color, 1.0), selected,
                                          anchor=anchor)
         self._line_width(1.0)
-        self._end_clips(clips)
 
     def _draw_point_markers(self, mvp, points, color, selected: bool,
                             anchor=None):
@@ -2865,7 +2939,7 @@ class Viewport(QOpenGLWidget):
         GL.glEnable(GL.GL_DEPTH_TEST)
 
     def _draw_clip_normals(self, mvp):
-        """One arrow per clipping plane, pointing the way things vanish.
+        """One arrow per clipping plane, pointing toward the visible side.
 
         A clipping plane is a rectangle and a rectangle looks the same from
         both sides, so until this was drawn there was nothing on screen that
@@ -2873,7 +2947,7 @@ class Viewport(QOpenGLWidget):
         the top of everything, because a plane lying flat against a face is
         exactly when you need to be told.
         """
-        frames = clip_plane_frames(self.scene.visible_objects())
+        frames = self._clip_frames()
         if not frames:
             return
         passes = clip_normal_arrows(frames, self.camera,
@@ -3044,18 +3118,33 @@ class Viewport(QOpenGLWidget):
             self._ghost = None
         self.update()
 
+    def _clip_frames(self):
+        """Read native plane geometry once, shared by the cut and its arrow.
+
+        Layer visibility can change without a scene revision. Including it
+        keeps a hidden plane from continuing to cut, and avoids repeatedly
+        entering OpenCASCADE from every pane's repaint.
+        """
+        key = (self.scene.revision, self._visible_layers())
+        cache = getattr(self, "_clip_frames_cache", None)
+        if cache is None or cache[0] != key:
+            cache = (key, clip_plane_frames(self.scene.visible_objects()))
+            self._clip_frames_cache = cache
+        return cache[1]
+
     def _clip_vectors(self) -> list:
         """vec4 clip equations from enabled clipping-plane objects.
         Keeps the half-space behind each plane's normal."""
+        frames = self._clip_frames()
         cache = getattr(self, "_clip_cache", None)
-        if cache is not None and cache[0] == self.scene.revision:
+        if cache is not None and cache[0] is frames:
             return cache[1]
         # Same frames the arrows are drawn from, so what the arrow promises
         # is what the shader does. Four is all the hardware guarantees.
         vecs = [clip_equation(o, n)
-                for o, n, on in clip_plane_frames(self.scene.visible_objects())
+                for o, n, on in frames
                 if on][:4]
-        self._clip_cache = (self.scene.revision, vecs)
+        self._clip_cache = (frames, vecs)
         return vecs
 
     def _set_clip_uniforms(self, prog, clips):
@@ -3089,7 +3178,11 @@ class Viewport(QOpenGLWidget):
         if self._preview is None:
             return
         tris, segs = self._ghost_geometry()
-        if tris is None and segs is None:
+        points = self._ghost.points if self._ghost is not None else []
+        if (len(points) and self.space != "model"
+                and self._drawing_through() is not None):
+            points = self._on_paper(points)
+        if tris is None and segs is None and not len(points):
             return
         gold = theme.SELECTION_COLOR
         # on a sheet everything is flat at z=0, so the order it is drawn in is
@@ -3113,6 +3206,19 @@ class Viewport(QOpenGLWidget):
             self._line_width(1.6)
             GL.glBindVertexArray(self._preview.vao)
             GL.glDrawArrays(GL.GL_LINES, 0, len(segs))
+            self._line_width(1.0)
+        if len(points):
+            # Free vertices have no face or edge to draw. Use the same marks
+            # as placed point objects, after taking model points onto paper.
+            if flat:
+                from .layout_view import point_marks
+                marks = point_marks(points, self.layout_view._point_mark_size())
+                self._preview.update(rebased(marks.reshape(-1, 3),
+                                            self._frame_anchor))
+                self._draw_lines(self._preview, mvp, (*gold, 0.85), 1.8)
+            else:
+                self._draw_point_markers(mvp, points, (*gold, 0.85), False,
+                                         anchor=self._frame_anchor)
             self._line_width(1.0)
         if flat:
             GL.glEnable(GL.GL_DEPTH_TEST)
@@ -3880,6 +3986,47 @@ class Viewport(QOpenGLWidget):
         hits = self.pick_objects(px, py)
         return hits[0] if hits else None
 
+    def point_on(self, obj_id: str, px: float, py: float):
+        """The point on an object nearest the ray through a pixel, or None.
+
+        Where a click landed on what it picked, for a command that needs
+        to know which part was meant, trim above all (#31). Of the points
+        the ray passes through, the nearest to the eye is the one seen.
+        Asked only when a command wants it: an exact distance on a large
+        solid is not free, and a plain click should not pay for it.
+        """
+        obj = self.scene.get(obj_id)
+        if obj is None:
+            return None
+        shape = obj.shape
+        if hasattr(shape, "face") and callable(shape.face):
+            shape = shape.face()                  # a picture's own plane
+        try:
+            from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+            from OCP.gp import gp_Pnt
+            from ..core import geometry as g
+            origin, direction = self._eye().ray_through(
+                px, py, self.width(), self.height())
+            origin = np.asarray(origin, float)
+            direction = np.asarray(direction, float)
+            direction /= np.linalg.norm(direction) or 1.0
+            lo, hi = obj.bbox()
+            reach = (float(np.linalg.norm(np.subtract(hi, lo)))
+                     + float(np.linalg.norm(np.add(lo, hi) / 2 - origin)) + 1.0)
+            ray = g.make_line(tuple(origin), tuple(origin + direction * reach))
+            dist = BRepExtrema_DistShapeShape(shape, ray)
+            if not dist.IsDone() or dist.NbSolution() == 0:
+                return None
+            best, best_t = None, float("inf")
+            for i in range(1, dist.NbSolution() + 1):
+                p = dist.PointOnShape1(i)
+                t = p.Distance(gp_Pnt(*origin))
+                if t < best_t:
+                    best, best_t = (p.X(), p.Y(), p.Z()), t
+            return best
+        except Exception:                                   # noqa: BLE001
+            return None                 # a mesh, a cloud: no exact point
+
     def pick_objects(self, px: float, py: float) -> list[str]:
         """Every object under the pixel, nearest first.
 
@@ -3917,7 +4064,8 @@ class Viewport(QOpenGLWidget):
                     found.append((pt_depth, obj.id))
                 continue
             shaded_faces = mesh.has_faces and (
-                obj.kind == "picture" or self._pick_mode() != "wireframe")
+                obj.kind in ("picture", "hatch")
+                or self._pick_mode() != "wireframe")
             if shaded_faces:
                 tris, _ = self._near_triangles(mesh, px - r, py - r,
                                                px + r, py + r, w, h, t)
@@ -4473,8 +4621,10 @@ class Viewport(QOpenGLWidget):
         menu = ObjectChooser(rows, self)
         self._chooser = menu
         menu.rowHovered.connect(self.set_choice_hover)
+        # a row chosen from the list is not a place on the object
         menu.objectChosen.connect(
-            lambda obj_id: self.objectClicked.emit(obj_id, mods))
+            lambda obj_id: (setattr(self, "last_click_px", None),
+                            self.objectClicked.emit(obj_id, mods)))
         menu.aboutToHide.connect(self._chooser_closed)
         # Down and to the right of the cursor, so that letting the button up
         # without moving lands in the gap rather than on the first row.
@@ -4698,12 +4848,18 @@ class Viewport(QOpenGLWidget):
             x0, y0 = self._press_pos.x(), self._press_pos.y()
             x1, y1 = self._box_end.x(), self._box_end.y()
             crossing = x1 < x0            # drag right-to-left = crossing
-            ids = self._band_pick(x0, y0, x1, y1, crossing, ev.modifiers())
+            # The keys a band was started with say what it is for: letting
+            # go of Ctrl+Shift a moment before the button is not changing
+            # your mind, and read off the release it turned a sweep for
+            # faces into one for the whole solid (#43). Keys first pressed
+            # partway through the sweep still count.
+            mods = self._hold_mods or ev.modifiers()
+            ids = self._band_pick(x0, y0, x1, y1, crossing, mods)
             self._box_active = False
             self._press_pos = None
             self._box_end = None
             if ids is not None:
-                self.boxSelected.emit(ids, ev.modifiers())
+                self.boxSelected.emit(ids, mods)
             self.update()
             return
         if self._press_pos is not None:
@@ -4721,6 +4877,7 @@ class Viewport(QOpenGLWidget):
                 return
             picked = self.pick_object(pos.x(), pos.y())
             if picked:
+                self.last_click_px = (pos.x(), pos.y())
                 self.objectClicked.emit(picked, ev.modifiers())
             else:
                 self.emptyClicked.emit(ev.modifiers())

@@ -165,20 +165,22 @@ def cmd_viewcapturetoclipboard(ctx):
 
 @command("clippingplane", aliases=("clip",))
 def cmd_clippingplane(ctx):
-    """Place a rectangular clipping plane on the CPlane: geometry on its
-    normal side is hidden in shaded viewports. Move or rotate the plane
-    object to move the cut; Flip reverses the kept side."""
+    """Place a rectangular clipping plane parallel to the CPlane through
+    the first corner: geometry on its normal side is hidden in shaded
+    viewports. Move or rotate the plane
+    object to move the cut; Flip reverses the kept side. The purple arrow
+    points toward the visible side, following Rhino's convention."""
     c1 = yield PointReq("First corner of clipping plane")
 
     def _rect(p):
         cp = ctx.cplane
-        u1, v1, _ = cp.from_world(c1)
+        u1, v1, w1 = cp.from_world(c1)
         u2, v2, _ = cp.from_world(p)
         if abs(u2 - u1) < 1e-9 or abs(v2 - v1) < 1e-9:
             return None
         return g.planar_face(g.make_polyline(
-            [cp.to_world(u1, v1), cp.to_world(u2, v1),
-             cp.to_world(u2, v2), cp.to_world(u1, v2)], closed=True))
+            [cp.to_world(u1, v1, w1), cp.to_world(u2, v1, w1),
+             cp.to_world(u2, v2, w1), cp.to_world(u1, v2, w1)], closed=True))
 
     c2 = yield PointReq("Opposite corner", rubber_from=c1,
                         choices={"Flip": ["No", "Yes"]}, preview_fn=_rect,
@@ -191,8 +193,8 @@ def cmd_clippingplane(ctx):
         face = g.mirror(face, tuple(c1), tuple(ctx.cplane.normal))
     obj = ctx.scene.add(face, name=_next_clip_name(ctx.scene))
     ctx.scene.update(obj.id, clip_plane={"enabled": True})
-    ctx.echo(f"Created {obj.name} — geometry on its normal side is "
-             "hidden. 'disableclippingplane' pauses it.")
+    ctx.echo(f"Created {obj.name}. The purple arrow points toward the visible "
+             "side. 'disableclippingplane' pauses it.")
 
 
 def _next_clip_name(scene) -> str:
@@ -751,12 +753,25 @@ def cmd_zebra(ctx):
 @command("gumball", mutates=False)
 def cmd_gumball(ctx):
     gb = _vp(ctx).gumball
-    gb.enabled = not gb.enabled
-    if ctx.viewport.config is not None:
-        ctx.viewport.config.set("gumball", gb.enabled)
-    _vp(ctx).update()
+    gb.set_enabled(not gb.enabled)
     ctx.echo(f"Gumball {'on' if gb.enabled else 'off'}.")
     yield from ()
+
+
+_GUMBALL_ALIGNMENTS = {"CPlane": "cplane", "Object": "object",
+                       "World": "world", "View": "view"}
+
+
+@command("gumballalignment", mutates=False)
+def cmd_gumballalignment(ctx):
+    """Choose what the gumball's axes follow: the CPlane, the object, the world or the view."""
+    gb = _vp(ctx).gumball
+    current = {v: k for k, v in _GUMBALL_ALIGNMENTS.items()}[gb.align]
+    choice = yield OptionReq("Gumball alignment",
+                             options=list(_GUMBALL_ALIGNMENTS),
+                             default=current)
+    gb.set_align(_GUMBALL_ALIGNMENTS[choice])
+    ctx.echo(f"Gumball aligned to the {choice if choice == 'CPlane' else choice.lower()}.")
 
 
 @command("pictureframe", aliases=("picture",), space="any")
@@ -776,6 +791,16 @@ def cmd_pictureframe(ctx):
     from .. import fileio
     path = yield FileReq("Image path (.png/.jpg/.jpeg/.webp)",
                          title="Choose picture", filters=fileio.picture_filter())
+    # With no picture in the scene the Add/RemoveAll question is not asked,
+    # but a script can't see that and may answer it anyway. The words mean
+    # what they would have meant; neither is a file anyone means to open.
+    if path.strip().lower() == "removeall":
+        ctx.echo("No picture frames to remove.")
+        return
+    if path.strip().lower() == "add":
+        path = yield FileReq("Image path (.png/.jpg/.jpeg/.webp)",
+                             title="Choose picture",
+                             filters=fileio.picture_filter())
     yield from place_picture(ctx, path)
 
 

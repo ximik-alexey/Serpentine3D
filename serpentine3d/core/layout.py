@@ -694,6 +694,121 @@ def move_sheet_item(kind: str, obj, dx: float, dy: float):
         move_annotation(kind, obj, dx, dy)
 
 
+def transform_sheet_item(kind: str, obj, matrix, size: float = 1.0,
+                         scene=None, force: bool = False) -> bool:
+    """Put anything a sheet holds through an affine map of the paper.
+
+    `matrix` is a 3x3 map of paper millimetres, (x, y, 1) in and out; it
+    moves every point an item is placed by. `size` is what the item's own
+    lengths become worth: text height, a dimension's offset, a hatch's
+    spacing. A uniform scale passes its factor, and a one-way stretch
+    passes 1, which moves text and dimensions without distorting them.
+
+    A detail's frame is mapped and its drawing scale kept, so a 1:50 detail
+    stays 1:50 and shows more or less of the model. A locked detail is left
+    alone, as it is by `move_sheet_item`, unless `force` says the caller
+    means it (a copy of a locked frame is not the frame the lock protects);
+    the return says whether the item was changed.
+
+    A turn or a reflection is drawn the way a drawing wants it rather than
+    literally. A note is always drawn level and reading forwards, so its
+    middle is what is turned or mirrored and the text is set level there; a
+    detail frame, which cannot turn either, moves its middle likewise and
+    keeps its shape. A mirrored dimension stays on the mirrored side of
+    what it measures, and a hatch's lines turn with any turn or reflection.
+    """
+    import numpy as np
+    m = np.asarray(matrix, float)
+    linear = m[:2, :2]
+    flips = float(np.linalg.det(linear)) < 0
+    square = linear @ linear.T
+    similar = np.allclose(square, np.eye(2) * square[0, 0], atol=1e-9)
+    scale = math.sqrt(max(float(square[0, 0]), 0.0))
+    # does it turn or flip anything, rather than only grow it
+    turns = similar and not np.allclose(linear, np.eye(2) * scale, atol=1e-9)
+
+    def at(x, y):
+        p = m @ np.array([float(x), float(y), 1.0])
+        return float(p[0]), float(p[1])
+
+    def pts(seq):
+        return [list(at(p[0], p[1])) for p in seq]
+
+    grow = abs(float(size) - 1.0) > 1e-12
+    if kind == "detail":
+        if obj.locked and not force:
+            return False
+        if turns:
+            cx, cy = at(obj.x + obj.w / 2, obj.y + obj.h / 2)
+            obj.w = max(obj.w * scale, MIN_DETAIL_MM)
+            obj.h = max(obj.h * scale, MIN_DETAIL_MM)
+            obj.x, obj.y = cx - obj.w / 2, cy - obj.h / 2
+            return True
+        xs, ys = zip(*(at(x, y) for x, y in detail_corners(obj)))
+        obj.x, obj.y = min(xs), min(ys)
+        obj.w = max(max(xs) - obj.x, MIN_DETAIL_MM)
+        obj.h = max(max(ys) - obj.y, MIN_DETAIL_MM)
+    elif kind == "object":
+        from . import geometry
+        m4 = np.eye(4)
+        m4[:2, :2] = m[:2, :2]
+        m4[:2, 3] = m[:2, 2]
+        obj.shape = geometry.apply_matrix(obj.shape, m4)
+    elif kind in ("note", "leader"):
+        middle = None
+        if kind == "note" and turns:
+            # set level and reading forwards where the turned or mirrored
+            # text would be: the middle of the text is what is moved
+            x0, y0, x1, y1 = annotation_bounds("note", obj, scene)
+            middle = at((x0 + x1) / 2, (y0 + y1) / 2)
+        elif kind == "note":
+            obj.x, obj.y = at(obj.x, obj.y)
+        else:
+            obj.points = pts(obj.points)
+        if grow:
+            # A named style owns the rendered height; scaling is an edit to
+            # this one, so it leaves the style at the size it was drawn.
+            height = note_text_height(obj, scene)
+            obj.style = ""
+            obj.height = height * abs(float(size))
+        if middle is not None:
+            # after the height, so the text is centred at the size it ends
+            x0, y0, x1, y1 = annotation_bounds("note", obj, scene)
+            obj.x += middle[0] - (x0 + x1) / 2
+            obj.y += middle[1] - (y0 + y1) / 2
+    elif kind == "dim":
+        obj.x1, obj.y1 = at(obj.x1, obj.y1)
+        obj.x2, obj.y2 = at(obj.x2, obj.y2)
+        if flips:
+            # its line is drawn to the left of first-to-second; mirrored,
+            # left is the other side, so the ends change places
+            obj.x1, obj.y1, obj.x2, obj.y2 = obj.x2, obj.y2, obj.x1, obj.y1
+        obj.offset *= abs(float(size))
+        if getattr(obj, "m1", None) is not None:
+            obj.detail_id = ""          # its points no longer project from
+            obj.m1 = obj.m2 = None      # the model points it was anchored to
+    elif kind == "rdim":
+        obj.cx, obj.cy = at(obj.cx, obj.cy)
+        obj.px, obj.py = at(obj.px, obj.py)
+    elif kind == "adim":
+        obj.vx, obj.vy = at(obj.vx, obj.vy)
+        obj.x1, obj.y1 = at(obj.x1, obj.y1)
+        obj.x2, obj.y2 = at(obj.x2, obj.y2)
+        obj.radius *= abs(float(size))
+    elif kind == "hatch":
+        obj.points = pts(obj.points)
+        if getattr(obj, "holes", None):
+            obj.holes = [pts(ring) for ring in obj.holes]
+        obj.spacing *= abs(float(size))
+        if similar:
+            a = math.radians(obj.angle)
+            d = linear @ np.array([math.cos(a), math.sin(a)])
+            obj.angle = math.degrees(math.atan2(d[1], d[0])) % 180.0
+    else:
+        return False
+    return True
+
+
 MIN_DETAIL_MM = 5.0
 
 
@@ -822,6 +937,40 @@ def sheet_item_bounds(kind: str, obj, scene=None) -> tuple:
     if kind == "object":
         return paper_object_bounds(obj)
     return annotation_bounds(kind, obj, scene)
+
+
+def sheet_item_linework(kind: str, obj, scene=None) -> list:
+    """The lines a sheet item stands on, as [(points, closed)] in paper
+    millimetres: what a paper snap lands on and what a pending transform
+    ghosts. A frame's edges, the box a note's text fills, a dimension's
+    extension and dimension lines, a hatch's loops. Paper geometry is a
+    shape already and gives none.
+    """
+    import numpy as np
+    if kind == "detail":
+        return [(list(detail_corners(obj)), True)]
+    if kind == "note":
+        x0, y0, x1, y1 = annotation_bounds("note", obj, scene)
+        return [([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], True)]
+    if kind == "leader":
+        return [(list(obj.points), False)]
+    if kind == "hatch":
+        return [(list(loop), True) for loop in [obj.points, *obj.holes]]
+    if kind == "dim":
+        a, b = np.array([obj.x1, obj.y1]), np.array([obj.x2, obj.y2])
+        delta = b - a
+        length = np.linalg.norm(delta)
+        normal = (np.array([-delta[1], delta[0]]) / length if length > 1e-9
+                  else np.zeros(2))
+        return [([a, a + normal * obj.offset, b + normal * obj.offset, b],
+                 False)]
+    if kind == "rdim":
+        return [([(obj.cx, obj.cy), (obj.px, obj.py)], False)]
+    if kind == "adim":
+        # the actual vertex and ray anchors, not the annotation's bbox
+        return [([(obj.x1, obj.y1), (obj.vx, obj.vy), (obj.x2, obj.y2)],
+                 False)]
+    return []
 
 
 def enclosing_polygon(polylines: list, px: float, py: float):

@@ -11,14 +11,15 @@ from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QDockWidget, QFileDialog, QInputDialog, QMainWindow,
-    QMenu, QMessageBox, QProgressDialog, QTabBar, QToolBar, QVBoxLayout,
-    QWidget,
+    QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QProgressDialog, QTabBar,
+    QTextEdit, QToolBar, QVBoxLayout, QWidget,
 )
 
 from . import commands as cmd_pkg
 from . import fileio
 from .commands.base import (
-    CommandContext, CommandProcessor, FileReq, PointReq, SelectReq, TextReq,
+    CommandContext, CommandProcessor, FileReq, OptionReq, PointReq, SelectReq,
+    TextReq, resolve,
 )
 from .core.history import History
 from .core.scene import Scene
@@ -54,6 +55,7 @@ def clamp_panel_width(width, window_width):
 
 
 APP_TITLE = "Serpentine3D"
+
 
 
 class MainWindow(QMainWindow):
@@ -209,6 +211,7 @@ class MainWindow(QMainWindow):
                                   viewport=self.viewport, window=self)
         self.ctx.current_path = None
         self.processor = CommandProcessor(self.ctx)
+        self._cursor_preview = None
         self._file_picker_open = False
         self.ctx.add_echo_listener(self.command_line.echo)
         self.processor.add_listener(self._sync_command_state)
@@ -622,7 +625,9 @@ class MainWindow(QMainWindow):
         vp.layoutSelectionChanged.connect(self._update_status)
         vp.layoutSelectionChanged.connect(self.properties.refresh)
         vp.history = self.history
-        vp.objectClicked.connect(self._on_object_clicked)
+        vp.objectClicked.connect(
+            lambda obj_id, mods, pane=vp: self._on_object_clicked(
+                obj_id, mods, pane))
         vp.emptyClicked.connect(self._on_empty_clicked)
         vp.boxSelected.connect(self._on_box_selected)
         vp.pointPicked.connect(self._on_point_picked)
@@ -835,9 +840,11 @@ class MainWindow(QMainWindow):
         # sizes the tools to the height it has and keeps them all in sight.
         bar.addWidget(tool_strip(groups, self.run_command, bar))
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, bar)
+        self._tools_toolbar = bar
 
     def _build_menus(self):
         mb = self.menuBar()
+        self._shortcut_actions = {}
 
         m_file = mb.addMenu("&File")
         self._action(m_file, "New", "Ctrl+N", lambda: self._file_new())
@@ -861,13 +868,22 @@ class MainWindow(QMainWindow):
         self._action(m_edit, "Copy", "Ctrl+C", self._copy_selected)
         self._action(m_edit, "Paste", "Ctrl+V", self._paste)
         m_edit.addSeparator()
-        self._action(m_edit, "Delete", None, self._delete_selected)
+        self._action(m_edit, "Delete", None, self._delete_selected,
+                     binding="delete")
         self._action(m_edit, "Select All", "Ctrl+A",
                      lambda: self.run_command("selall"))
         self._action(m_edit, "Select None", None,
                      lambda: self.run_command("selnone"))
         self._action(m_edit, "Invert Selection", None,
                      lambda: self.run_command("invert"))
+        m_edit.addSeparator()
+        for label, command in (
+                ("Group", "group"), ("Ungroup", "ungroup"),
+                ("Hide", "hide"), ("Show all", "show"),
+                ("Lock", "lock"), ("Unlock all", "unlockall"),
+                ("Trim", "trim"), ("Join", "join")):
+            self._action(m_edit, label, None,
+                         lambda c=command: self.run_command(c), binding=command)
         m_edit.addSeparator()
         self._action(m_edit, "Control Points On", "F10",
                      lambda: self.run_command("pointson"))
@@ -885,6 +901,11 @@ class MainWindow(QMainWindow):
         m_view.addSeparator()
         self._action(m_view, "Zoom Extents", "Ctrl+E",
                      lambda: self.run_command("zoomextents"))
+        for label, command in (("Zoom Window", "zoomwindow"),
+                               ("Undo View", "undoview"),
+                               ("Redo View", "redoview")):
+            self._action(m_view, label, None,
+                         lambda c=command: self.run_command(c), binding=command)
         m_view.addSeparator()
         self._action(m_view, "Wireframe", None,
                      lambda: self.run_command("wireframe"))
@@ -899,6 +920,9 @@ class MainWindow(QMainWindow):
         m_view.addSeparator()
         self._action(m_view, "AI Assistant", "Ctrl+Shift+A",
                      self.show_ai_panel)
+        tools_toolbar_action = self._tools_toolbar.toggleViewAction()
+        tools_toolbar_action.setText("Tools Toolbar")
+        m_view.addAction(tools_toolbar_action)
         m_view.addSeparator()
         # Four Viewports was two levels down and went unfound (GitHub #5
         # asked for a layout that had shipped), so it sits in View itself.
@@ -935,6 +959,11 @@ class MainWindow(QMainWindow):
         m_draft.addSeparator()
         self._action(m_draft, "Export PDF...", "Ctrl+P",
                      lambda: self.run_command("exportpdf"))
+        m_draft.addSeparator()
+        self._action(m_draft, "Toggle Ortho", None,
+                     lambda: self.run_command("ortho"), binding="ortho")
+        self._action(m_draft, "Toggle Grid Snap", None,
+                     lambda: self.run_command("gridsnap"), binding="gridsnap")
 
         m_tools = mb.addMenu("&Tools")
         self._action(m_tools, "Command Palette...", "Ctrl+Shift+P",
@@ -950,9 +979,14 @@ class MainWindow(QMainWindow):
 
         m_help = mb.addMenu("&Help")
         self._action(m_help, "Commands", None, self._show_commands)
+        self._action(m_help, "Command Reference", None, self.show_help_browser)
         self._action(m_help, "Check for Updates…", None,
                      self._check_updates_manual)
         self._action(m_help, "About", None, self._about)
+        # Keep the Python menu wrappers alongside the action registry.
+        self._menus = (m_file, m_edit, m_view, m_ports, m_draft, m_tools,
+                       self._plugins_menu, m_help)
+        self._menu_actions = tuple(menu.menuAction() for menu in self._menus)
 
     def plugin_menu_action(self, label: str, fn):
         self._action(self._plugins_menu, label, None, fn)
@@ -965,10 +999,13 @@ class MainWindow(QMainWindow):
         os.makedirs(d, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(d))  # portable
 
-    def _action(self, menu, label, shortcut, fn):
+    def _action(self, menu, label, shortcut, fn, *, binding=None):
+        from .utils.config import DEFAULT_SHORTCUTS
         act = QAction(label, self)
-        if shortcut:
-            act.setShortcut(QKeySequence(shortcut))
+        if binding is None and shortcut:
+            binding = DEFAULT_SHORTCUTS[shortcut]
+        if binding is not None:
+            self._shortcut_actions[binding] = act
         act.triggered.connect(lambda checked=False: fn())
         menu.addAction(act)
         return act
@@ -976,6 +1013,19 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------- commanding
 
     def run_command(self, name: str):
+        # These controls have no input requests and can change during a
+        # pick. Running them through the processor would cancel that pick
+        # and replace its repeat target with the toggle.
+        control = resolve(name)
+        if (self.processor.busy and control is not None
+                and control.name in ("ortho", "gridsnap")):
+            for _ in control.fn(self.ctx):
+                pass
+            self.osnap_bar.refresh()
+            self._refresh_rubber(None)
+            self._repaint_panes()
+            self.command_line.focus()
+            return
         self._pending_import_paths.clear()
         self.processor.run(name)
         self.command_line.focus()
@@ -1032,7 +1082,7 @@ class MainWindow(QMainWindow):
 
     def _on_option_chip(self, name: str):
         self.processor.set_option(name)
-        self._live_preview(self.command_line.input.text())
+        self._live_preview(self.command_line.input.text(), use_cursor=True)
         self.command_line.focus()
 
     def _on_keyword_chip(self, word: str):
@@ -1053,13 +1103,33 @@ class MainWindow(QMainWindow):
             self.command_line.echo("Direction released")
         vp.update()
 
-    def _live_preview(self, text: str):
+    def _standing_ghost(self):
+        """The ghost a question shows before anything is typed, or None.
+
+        A point's ghost follows the mouse and a number's what is typed; a
+        question asked after the picking is done, like mirror's "Keep
+        original?", has neither, and with no ghost the result it is waiting
+        to make looks like nothing happened at all.
+        """
         req = self.processor.request
+        if isinstance(req, OptionReq) and req.preview_fn is not None:
+            return self.processor.preview_for(req.default)
+        return None
+
+    def _live_preview(self, text: str, *, use_cursor=False):
+        req = self.processor.request
+        # Typing supersedes the cursor, even when the text is invalid or
+        # cleared. An option chip alone can reuse the current mouse point.
+        if not use_cursor:
+            self._cursor_preview = None
         if req is not None and getattr(req, "preview_fn", None) and \
                 text.strip():
             shape = self.processor.preview_shape(text)
+        elif (use_cursor and self._cursor_preview is not None
+              and self._cursor_preview[0] is req):
+            shape = self.processor.preview_for(self._cursor_preview[1])
         else:
-            shape = None
+            shape = self._standing_ghost()
         # every pane. A ghost is a shape in the world, not a picture belonging
         # to one view, and the pane you are drawing in is whichever one the
         # cursor is over — so put it on the primary alone and the shape a
@@ -1070,6 +1140,9 @@ class MainWindow(QMainWindow):
     def _sync_command_state(self):
         busy = self.processor.busy
         req = self.processor.request
+        if (self._cursor_preview is not None
+                and self._cursor_preview[0] is not req):
+            self._cursor_preview = None
         active = self.processor.active
         self.properties.set_model_text_command_active(
             active is not None and active.name == "textobject")
@@ -1083,11 +1156,15 @@ class MainWindow(QMainWindow):
                 req.prompt = "Text position (baseline anchor)"
         self.command_line.set_prompt(self.processor.prompt_text())
         self.command_line.set_options(self.processor.option_chips())
-        self.command_line.set_keywords(self.processor.keyword_chips())
+        self.command_line.set_keywords(self.processor.keyword_chips(),
+                                       self.processor.keyword_default())
         # every pane, because a ghost is set on every pane: clearing one of
         # them leaves a preview on the others that no command owns any more
+        ghost = self._standing_ghost()
         for vp in self.all_viewports():
-            vp.set_ghost(None)
+            vp.set_ghost(ghost)
+        # Let a new request show its first pointer preview immediately.
+        self._ghost_timer = None
         self.command_line.point_pending = isinstance(req, PointReq)
         # Space submits like Enter everywhere but a free-text prompt
         self.command_line.text_pending = isinstance(req, TextReq)
@@ -1392,9 +1469,14 @@ class MainWindow(QMainWindow):
         elif self.processor.busy and self.processor.request is req:
             self.processor.cancel()
 
-    def _on_object_clicked(self, obj_id: str, modifiers):
-        if isinstance(self.processor.request, SelectReq):
-            self.processor.click_object(obj_id)
+    def _on_object_clicked(self, obj_id: str, modifiers, pane=None):
+        req = self.processor.request
+        if isinstance(req, SelectReq):
+            at = None
+            px = getattr(pane, "last_click_px", None)
+            if req.want_point and px is not None:
+                at = pane.point_on(obj_id, *px)
+            self.processor.click_object(obj_id, at=at)
             return
         additive = bool(modifiers & (Qt.KeyboardModifier.ShiftModifier
                                      | Qt.KeyboardModifier.ControlModifier))
@@ -1451,6 +1533,7 @@ class MainWindow(QMainWindow):
         self._refresh_rubber(point, source=self.sender())
         req = self.processor.request
         if isinstance(req, PointReq) and getattr(req, "preview_fn", None):
+            self._cursor_preview = (req, point)
             # ghost of the pending result under the cursor, ~30Hz cap
             from PySide6.QtCore import QElapsedTimer
             timer = getattr(self, "_ghost_timer", None)
@@ -1542,6 +1625,7 @@ class MainWindow(QMainWindow):
                 return
             self._clipboard = ("sheet", [(k, _copy.deepcopy(o))
                                          for k, o in lv.selected])
+            self._claim_clipboard(len(lv.selected), "sheet item")
             self.ctx.echo(f"Copied {len(lv.selected)} sheet item(s).")
             return
         objs = self.selection.objects()
@@ -1549,7 +1633,26 @@ class MainWindow(QMainWindow):
             return
         self._clipboard = ("model", [(o.name, o.shape, o.layer_id)
                                      for o in objs])
+        self._claim_clipboard(len(objs), "object")
         self.ctx.echo(f"Copied {len(objs)} object(s).")
+
+    def _claim_clipboard(self, count: int, noun: str):
+        """Make a copy of objects what the system clipboard holds.
+
+        Paste pastes text when the clipboard holds text (#37), so a copy of
+        objects has to take the clipboard over, or text copied before it
+        would win. It does so in words, which is also what survives a
+        clipboard manager that keeps only text. Words and nothing else: a
+        QMimeData made here and left on the clipboard segfaults PySide6 as
+        the interpreter shuts down, so quitting after a copy crashed.
+        """
+        plural = "" if count == 1 else "s"
+        self._clipboard_words = f"{count} {noun}{plural} copied in Serpentine3D"
+        QApplication.clipboard().setText(self._clipboard_words)
+
+    def _copied_objects_are_on_the_clipboard(self, mime) -> bool:
+        return (mime is not None
+                and mime.text() == getattr(self, "_clipboard_words", None))
 
     def _paste(self):
         """Paste asks the clipboard, because what it holds is not in doubt.
@@ -1559,6 +1662,19 @@ class MainWindow(QMainWindow):
         that is showing — which need not be the one they were copied from,
         and that is the point of it.
         """
+        mime = QApplication.clipboard().mimeData()
+        if (mime is not None and mime.hasText() and mime.text()
+                and not self._copied_objects_are_on_the_clipboard(mime)):
+            # Text was copied last, from anywhere: it goes where you type,
+            # as right-click Paste in the command line puts it, and as
+            # Rhino's Paste does with text (#37).
+            if self.command_workspace.mode == "ai":
+                field = self.command_workspace.assistant.input
+            else:
+                field = self.command_line.input
+            field.setFocus()
+            field.paste()
+            return
         clip = getattr(self, "_clipboard", None)
         if not clip:
             return
@@ -1674,7 +1790,8 @@ class MainWindow(QMainWindow):
         if path:
             self._open_path(path)
 
-    def _import_showing_progress(self, path: str, scene=None) -> int:
+    def _import_showing_progress(self, path: str, scene=None,
+                                 replace: bool = False) -> int:
         """Import `path`, showing what it is doing and offering a way out.
 
         A set-design .3dm is minutes of work; with no dialog the window simply
@@ -1701,7 +1818,8 @@ class MainWindow(QMainWindow):
 
         try:
             return fileio.import_file(scene or self.scene, path,
-                                      progress=fileio.throttled(report))
+                                      progress=fileio.throttled(report),
+                                      replace=replace)
         finally:
             dlg.close()
 
@@ -1710,7 +1828,7 @@ class MainWindow(QMainWindow):
         welcome screen)."""
         try:
             self.history.checkpoint("open")
-            self._import_showing_progress(path)
+            self._import_showing_progress(path, replace=True)
             if self.journal is not None:
                 self.journal.note_load(path)
             if path.endswith(".serp"):
@@ -2491,25 +2609,33 @@ class MainWindow(QMainWindow):
             sc.setParent(None)
             sc.deleteLater()
         self._user_shortcuts = []
-        self._user_shortcut_keys = set()
         wanted = {}
         for key, command in (self.cfg.get("shortcuts",
                                           default={}) or {}).items():
             seq = QKeySequence(key)
             if seq.isEmpty():
                 continue
-            wanted[seq.toString()] = command
-        # the user's keys win: strip clashing built-in menu shortcuts
-        for act in self.findChildren(QAction):
-            if not act.shortcut().isEmpty() \
-                    and act.shortcut().toString() in wanted:
-                act.setShortcut(QKeySequence())
+            wanted[seq.toString()] = command.strip().lower()
+        # The configuration owns every keyboard binding. Menu actions own
+        # their Qt shortcuts so showing a key never installs it twice.
+        for command, act in self._shortcut_actions.items():
+            act.setShortcuts([QKeySequence(key) for key, target in wanted.items()
+                              if target == command])
         for key_text, command in wanted.items():
+            if command in self._shortcut_actions:
+                continue
             sc = QShortcut(QKeySequence(key_text), self)
             sc.activated.connect(
-                lambda c=command: self.run_command(c))
+                lambda c=command: self._activate_shortcut(c))
             self._user_shortcuts.append(sc)
-            self._user_shortcut_keys.add(key_text)
+        self._keyboard_bindings = wanted
+
+    def _activate_shortcut(self, command):
+        action = self._shortcut_actions.get(command)
+        if action is not None:
+            action.trigger()
+        else:
+            self.run_command(command)
 
     # ------------------------------------------------------------------ misc
 
@@ -2623,39 +2749,30 @@ class MainWindow(QMainWindow):
             pressed = QKeySequence(ev.keyCombination())
         except Exception:
             return False
-        for key, cmd in (self.cfg.get("shortcuts", default={}) or {}).items():
+        for key, cmd in self._keyboard_bindings.items():
             seq = QKeySequence(key)
             if not seq.isEmpty() and seq.matches(pressed) == \
                     QKeySequence.SequenceMatch.ExactMatch:
-                self.run_command(cmd)
+                self._activate_shortcut(cmd)
                 return True
         return False
 
+    def _text_editor_has_focus(self):
+        field = QApplication.focusWidget()
+        return (isinstance(field, (QLineEdit, QPlainTextEdit, QTextEdit))
+                and not field.isReadOnly()
+                and field is not getattr(
+                    getattr(self, "command_line", None), "input", None))
+
     def keyPressEvent(self, ev):
+        # Native editor shortcuts have already had their chance. An editor's
+        # ignored key must not fall through to the model shortcut fallback.
+        # Read-only history still participates in normal window shortcuts.
+        if self._text_editor_has_focus():
+            ev.accept()
+            return
         if self._match_user_shortcut(ev):
-            return
-        # fallback for env without a WM where QAction shortcuts don't fire
-        if ev.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            handlers = {
-                Qt.Key.Key_C: self._copy_selected,
-                Qt.Key.Key_V: self._paste,
-                Qt.Key.Key_A: lambda: self.run_command("selall"),
-                Qt.Key.Key_Z: lambda: self.run_command("undo"),
-                Qt.Key.Key_Y: lambda: self.run_command("redo"),
-            }
-            fn = handlers.get(ev.key())
-            if fn:
-                fn()
-                return
-        if ev.key() == Qt.Key.Key_F1 \
-                and "F1" not in getattr(self, "_user_shortcut_keys", ()):
-            self.show_help_browser()
-            return
-        if ev.key() == Qt.Key.Key_F10:
-            self.run_command("pointson")
-            return
-        if ev.key() == Qt.Key.Key_F11:
-            self.run_command("pointsoff")
+            ev.accept()
             return
         # any printable key focuses the command line (Rhino behaviour)
         text = ev.text()
@@ -2678,12 +2795,14 @@ class MainWindow(QMainWindow):
                     field.insertPlainText(text)
                 ev.accept()
                 return
-        if text and text.isprintable() and not self.command_line.input.hasFocus():
+        if (text and text.isprintable()
+                and not ev.modifiers() & (
+                    Qt.KeyboardModifier.ControlModifier
+                    | Qt.KeyboardModifier.AltModifier
+                    | Qt.KeyboardModifier.MetaModifier)
+                and not self.command_line.input.hasFocus()):
             self.command_line.focus()
             self.command_line.input.insert(text)
-            return
-        if ev.key() == Qt.Key.Key_Delete:
-            self._delete_selected()
             return
         if ev.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
             if not self.processor.busy and self.processor.last_command:
@@ -2807,6 +2926,11 @@ def _selftest() -> int:
             lines.append(f"step: {os.path.getsize(step)} bytes")
         vol = g.volume(scene.all()[0].shape)
         lines.append(f"volume: {vol:.1f}")
+        # SketchUp's reader, which a bundle can leave behind without
+        # anything else noticing; its core loads the compiled triangulator
+        import openskp
+        import openskp._core
+        lines.append(f"skp: openskp {openskp.__version__}")
         ok = abs(vol - 975.6) < 1.0
         lines.append("SELFTEST OK" if ok else "SELFTEST FAILED: bad volume")
     except Exception as exc:                                  # noqa: BLE001
@@ -2897,7 +3021,7 @@ def run_app(app, splash=None):
     template = os.path.expanduser("~/.config/serpentine3d/template.serp")
     if os.path.exists(template):
         try:
-            fileio.import_file(window.scene, template)
+            fileio.import_file(window.scene, template, replace=True)
             window.mark_saved()
             window.command_line.echo("Started from template.serp.")
         except Exception:                                     # noqa: BLE001
@@ -2918,7 +3042,7 @@ def run_app(app, splash=None):
     for arg in app.arguments()[1:]:
         if not arg.startswith("-") and os.path.exists(arg):
             try:
-                fileio.import_file(window.scene, arg)
+                fileio.import_file(window.scene, arg, replace=True)
                 if arg.endswith(".serp"):
                     window.ctx.current_path = os.path.abspath(arg)
                 window.command_line.echo(

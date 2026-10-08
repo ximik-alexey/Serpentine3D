@@ -204,6 +204,13 @@ class SerpApi:
                 raise ApiError(
                     f"Command needs more input: '{prompt}'. "
                     f"Provide additional values in `inputs`.")
+        except Exception:
+            # The command this call started is this call's to clean up: left
+            # at its prompt, it would refuse every later external call, undo
+            # included, until someone at the window pressed Escape.
+            if self.processor.busy:
+                self.processor.cancel()
+            raise
         finally:
             self.window.ctx._echo_fns.remove(listener)
         return {"messages": messages}
@@ -372,7 +379,16 @@ class SerpApi:
             self.selection.clear()
             return {"selected": []}
         if names:
-            ids = [self._obj(n).id for n in names]
+            ids = []
+            for ref in names:
+                # An id is one object; a name is every object that has it,
+                # since copies of one part share a name.
+                found = ([self.scene.get(ref)] if self.scene.get(ref)
+                         else [o for o in self.scene.all()
+                               if o.name.lower() == ref.lower()])
+                if not found:
+                    raise ApiError(f"No object named or id '{ref}'")
+                ids += [o.id for o in found if o.id not in ids]
         else:
             candidates = self.scene.visible_objects()
             if kind:
@@ -435,7 +451,9 @@ class SerpApi:
 
     # -------------------------------------------------------------- file i/o
 
-    def import_file(self, path: str) -> dict:
+    def import_file(self, path: str, zoom_extents: bool = False) -> dict:
+        """Add a file to the scene. The view stays where the modeller left
+        it unless `zoom_extents` asks for it to fit what is there."""
         path = os.path.abspath(os.path.expanduser(path))
         if not os.path.exists(path):
             raise ApiError(f"File not found: {path}")
@@ -445,7 +463,8 @@ class SerpApi:
         except Exception as exc:
             self.history.discard_checkpoint()
             raise ApiError(f"Import failed: {exc}") from exc
-        self.viewport.zoom_extents()
+        if zoom_extents:
+            self.viewport.zoom_extents()
         return {"imported": n}
 
     def export_file(self, path: str, selected_only: bool = False) -> dict:

@@ -6,11 +6,57 @@ Lourenço Vaz Pinto's first-use report as a practising architect on Linux
 (Bluefin), plus [#5](https://github.com/chisomobanzi/Serpentine3D/issues/5)
 from Jonas Pedrotti.
 
-Last updated when 0.10.3 was cut (2026-09-19).
+Last updated when 0.10.5 was cut (2026-09-30).
 
 ---
 
 ## Where things stand
+
+Version `0.10.5` is in `pyproject.toml`, the lockfile and the three packaging
+files; `CHANGELOG.md`'s 0.10.5 section is dated 2026-09-30. Three reporters
+and a QA pass. Keith Sloan's #34: Rhino faces that run to a pole or round a
+seam are built from their trims and keep their area, a face closing on
+itself is a solid, and a surface with creases measures its true area and
+volume (the DinerMug came out negative before). Jonas Pedrotti's #33 and
+#31: a hatch as a model object, read from and written to DXF, and trim in
+one click. Lourenço Vaz Pinto's #36, #39 and #43: scale, scale1d, scale2d,
+mirror and rotate on everything picked on a sheet, the sheet gumball's ring
+and Shift-pad doing the same; a PDF no longer saved as `.pdf.pdf`; and a
+Ctrl+Shift band that keeps the chord it started with. From QA while testing
+those: mirror ghosts its result on a sheet and while it asks about the
+original, the Osnap bar says Off and dims its types when snaps are off, and
+a question's answers are chips to click.
+
+Release validation on Linux: 3,740 tests passed under the offscreen runner
+on Mesa. Released on 2026-09-30: pushed, tagged `v0.10.5`, published with the
+Linux AppImage, Windows installer and Apple Silicon DMG all attached. The
+packaged AppImage was checked first: `--version` read 0.10.5, the self-test
+passed, and a running copy measured a solid, made a hatch in the model and
+exported a sheet to PDF over RPC. The DMG was built on the Mac mini from the
+tag, its self-test passed, and it was copied back with matching SHA-256.
+
+Version `0.10.4` is in `pyproject.toml`, the lockfile and the three packaging
+files; `CHANGELOG.md`'s 0.10.4 section is dated 2026-09-29. Three batches.
+Jonas Pedrotti's second, all five of his open issues: the transform commands
+reach what is held (#29), and a held set of faces and edges moves as one
+change rather than one part after another, which had been double counting;
+a cutting curve that stops a whisker short of a curve splits it (#32); a DXF
+ellipse is read as written (#28); Ctrl+Shift and a dragged band hold faces,
+edges and segments (#30); and a right-click on a layer moves the selection
+onto it (#27). With them, imported Rhino solids are no longer inside out
+(#26). The second batch came from driving the program from an assistant over
+RPC and MCP: importing a `.serp` adds to the scene instead of replacing it,
+pictures draw in front of the surface they hang on, a bridge command that
+fails cancels itself, snapping survives an imported mesh, and a bridge import
+leaves the camera alone. The third is one fix found while cutting this
+release: a wedged spacenavd hung the program at launch, and the suite with
+it. The turntable renderer still never draws pictures; logged, not fixed.
+
+Release validation on Linux: 3,586 tests passed under the offscreen runner
+on Mesa. Released on 2026-09-29: pushed, tagged `v0.10.4`, published with the
+Linux AppImage, Windows installer and Apple Silicon DMG all attached. The
+packaged AppImage was checked first: `--version` read 0.10.4, the self-test
+passed, and a running copy opened a QA scene over RPC.
 
 Version `0.10.3` is in `pyproject.toml`, the lockfile and the three packaging
 files; `CHANGELOG.md`'s 0.10.3 section is dated 2026-09-19. One fix, for the

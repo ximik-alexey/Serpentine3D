@@ -1,8 +1,379 @@
 # Changelog
 
-## Unreleased
+## 0.10.9 (2026-10-07)
+
+### Added
+
+- **Vertical Move and Copy (#49).** Press `V` then Enter, or choose
+  `Vertical=Yes`, to constrain the displacement to the construction plane's
+  normal. Pick a destination or type a signed distance, including units;
+  previews follow the constraint and Copy keeps it for repeated copies.
+  Keyboard shortcuts and aliases accept `! _Move _Vertical` and
+  `! _Copy _Vertical` to start with Vertical enabled.
+
+- **SetPt on subobjects, with live previews (#62).** Held faces, edges and
+  curve segments now accept SetPt. The preview shows the rebuilt parent,
+  including adjoining faces and shared corners. Supported circular caps and
+  untrimmed NURBS faces retain their native geometry. Operations that would
+  collapse or break the geometry leave the original intact.
 
 ### Fixed
+
+- **Grouping and ungrouping preserve selection (#63).** The resulting group
+  or ungrouped objects stay selected, ready for the next command.
+
+- **Clipping planes retain their drawn elevation (#64).** The rectangle is
+  parallel to the construction plane at the first corner's depth, rather
+  than being projected onto the construction plane at Z=0. Preview and
+  committed geometry use the same elevation, including on rotated planes.
+
+## 0.10.8 (2026-10-05)
+
+### Added
+
+- **SetPt previews its pending result (#47).** Curves, surfaces and standalone
+  points show a temporary preview in every viewport while choosing or typing
+  target coordinates. Changing X/Y/Z refreshes the preview, including turning
+  all axes off and back on. Confirmation or cancellation clears the preview.
+
+- **Type `0` for the world origin.** At position prompts, `0` means `0,0,0`,
+  including after another point or on a moved construction plane. Dimension
+  and factor prompts continue to treat it as a numeric zero.
+
+- **Bring back the side toolbar from View > Tools Toolbar.** The checked menu
+  item follows the toolbar's visibility and restores it after closing it or
+  reopening a saved layout with the toolbar hidden.
+
+### Fixed
+
+- **Fillet imported STEP solids with the normal Fillet tool.** Fillet accepts
+  curves, solids and surfaces, and uses preselected solid edges when present.
+  Whole-object mode explains that it rounds all edges. Geometry failures give
+  smaller-radius or specific-edge guidance, and failed edge selections stay
+  available to retry, including when some objects succeeded.
+
+- **Make2D hidden lines default to the Hidden linetype (#51).** Newly created
+  `Make2D hidden` layers use short dashes, with output curves inheriting the
+  layer style. Later Make2D runs preserve existing output-layer styles.
+
+- **Layer names stay readable while renaming (#52).** The inline name editor
+  uses the layer row's full height without the padding of a standalone text
+  field, so letters are no longer cut off while typing.
+
+## 0.10.7 (2026-10-02)
+
+### Added
+
+- **Default modelling shortcuts (#50).** Group and ungroup use Ctrl+G and
+  Ctrl+Shift+G; hide and show all use Ctrl+H and Ctrl+Shift+H; lock and
+  unlock all use Ctrl+L and Ctrl+Shift+L. Ctrl+T starts Trim and Ctrl+J
+  joins. F8 toggles Ortho, F9 toggles grid snap, Ctrl+W zooms into a window,
+  and Home/End undo and redo camera changes. Ctrl+Shift+E fits the model
+  alongside the existing Ctrl+E. Older settings receive these presets
+  while keeping custom bindings. Ortho and grid snap can change during an
+  unfinished drawing without cancelling it or changing the repeat command.
+
+- **Keyboard defaults are visible and editable.** Settings > Shortcuts
+  includes the existing file, clipboard and view bindings alongside the
+  modelling presets. Removing a key keeps it unbound after restart;
+  Restore keyboard defaults resets just the keyboard. Duplicate keys show
+  a conflict while retaining the last valid assignments. Menu shortcuts
+  follow edits immediately, with Show all and Unlock all labelled explicitly.
+
+- **Preview the rebuilt object when transforming subobjects (#48).** Move,
+  Rotate and Scale show the complete parent geometry while editing held
+  faces, solid edges or curve segments, including the neighbours that follow
+  the edit. The original stays in place until confirmation, cancellation
+  clears the preview, and unsupported edits are refused as before.
+
+### Fixed
+
+- **Make2D curves can be selected and measured safely (#55).** Some projected
+  curves carried only a two-dimensional curve, and measuring their length
+  in Properties crashed the geometry kernel. Both Make2D output paths now
+  build the missing three-dimensional curves. Older saved drawings are
+  repaired before measurement too, keeping their projected geometry.
+
+- **The clipping-plane arrow points toward the visible half (#44).** The
+  purple indicator faced the hidden side. It now follows Rhino's convention,
+  and command feedback explains its direction. Existing saved clipping
+  planes keep cutting the same half of the model.
+
+- **GPU buffers stay with their owning OpenGL context.** Reusing buffers
+  between contexts that did not share resources caused a native NVIDIA
+  driver crash. The cache now follows the context group that owns each
+  buffer, and deletion waits for that group to be current. Clipping state
+  is cleared after a failed draw. Native fault traces and paint errors are
+  saved to `~/.serpentine3d/crash.log` to help investigate further reports.
+  The exact Windows incident in #53 remains unconfirmed.
+
+- **Tests default to headless rendering.** Without an explicit Qt platform,
+  tests use offscreen rendering with Mesa, keeping their windows off the
+  desktop. An explicitly selected Qt platform still wins.
+
+- **Windows validation uses the platform's paths and fonts.** Drop tests
+  compare file paths consistently, picture tests complete their graphics
+  stubs, and offscreen Qt uses the runner's installed fonts.
+
+## 0.10.6 (2026-10-01)
+
+### Added
+
+- **Choose the gumball's alignment (#41).** Type `GumballAlignment`, or
+  click the small tag beside the gumball, to choose CPlane, Object, World
+  or View. View follows the viewport's view plane. Object follows the
+  direction of a line or the plane of a flat curve or surface, and the
+  axes of text, hatches and pictures. Solids and selections of several
+  objects keep the CPlane. The choice is saved and shared by every pane.
+
+- **SketchUp files import (#42).** File > Import and drag and drop take a
+  `.skp`, on Linux, Windows and Mac, with no SketchUp needed: SketchUp's own
+  reader is a Windows and Mac SDK, so on Linux nothing could open one. The
+  file is read by [OpenSKP](https://github.com/iamahsanmehmood/openskp), which
+  reads the format without it. Each group or component placed at the top of
+  the model comes in as an object for every separate body it holds, its
+  faces joined into a solid where they close, so push/pull, booleans and
+  fillets work on it, facing outward however SketchUp had them wound. Stray
+  edges come in as curves beside it, and what one group made is grouped so
+  it selects together. Faces loose at the top come in one object per tag.
+  Tags become layers with their colours and visibility, taken from the
+  faces when a group itself is untagged, and material colours come across.
+  Sizes are converted from SketchUp's inches. Curved surfaces arrive as
+  SketchUp's facets with every edge showing, and textures, face-by-face
+  colours, scenes and dimensions are not imported. Some files saved by
+  SketchUp 2018 and 2019, and by very old versions, cannot be read yet, and
+  say so with the way round it: export from SketchUp as OBJ, FBX or DXF.
+
+### Fixed
+
+- **Switching the gumball preserves its alignment (#41).** Turning it off
+  and on used to forget the alignment, and choosing an alignment after
+  that could fail. Both settings now keep each other, and the on/off
+  switch applies to every pane.
+
+- **Ctrl+V pastes text into the command line (#37).** An empty command
+  line hands Ctrl+V to the window so that it can paste copied objects, and
+  paste only knew about objects: a command name or a coordinate copied from
+  anywhere else could be pasted with a right-click, or with Ctrl+V once
+  something was typed, but not with Ctrl+V into an empty line, which is
+  where it is wanted. Paste now does what Rhino's does. Text on the
+  clipboard goes to the command line, or to the Assistant when that is
+  where you are typing, and objects paste when objects were copied last.
+  Copying objects now puts them on the system clipboard as well, so text
+  copied before them cannot win against them, and pasting that copy
+  somewhere else gives a line saying what was copied.
+
+## 0.10.5 — 2026-09-30
+
+### Added
+
+- **A hatch in the model, and hatches in and out of DXF (#33).** Until now
+  a hatch could only be drawn on a layout, and `hatch` anywhere else said
+  so. In the model it now fills the closed flat curves you pick, a curve
+  inside another being a hole, and places one hatch object for each region
+  they make. The curves are kept, as Rhino keeps them. A hatch is its own
+  kind of object: it moves, turns, scales and copies as one, its lines turn
+  with it and their spacing scales with it, and Properties changes its
+  pattern, spacing or angle in place as one undo step. Its area is the area
+  it covers, and it snaps to its boundary rather than to every line. Lines,
+  cross and solid are the patterns, as on a sheet, and the pattern starts
+  from the layer's. A solid hatch is drawn flat, and filled in every display
+  mode. DXF `HATCH` entities now import as hatches, their boundaries built
+  exactly and their pattern read as its angle and spacing, a pair of
+  directions at right angles as a cross; dashes are not drawn, so a dashed
+  pattern comes in as its lines. Hatches export to DXF as `HATCH` entities
+  and to `.3dm` as their curves, since rhino3dm cannot write a hatch. A
+  file holding a hatch needs this release or newer to open. `selhatch`
+  selects them.
+
+- **A question's answers can be clicked.** A prompt such as mirror's
+  "Keep original? (Yes/No) <Yes>" could only be answered by typing or by
+  Enter. Its answers now show as chips on the command line, as Rhino puts
+  them on its own, the default outlined; clicking one is the same as
+  typing it, and a right-click still takes the default. A question with a
+  long list of answers, such as which block to insert, is still typed.
+
+### Fixed
+
+- **A Ctrl+Shift band holds faces even when you let go of the keys first
+  (#43).** The band read Ctrl+Shift off the mouse release, so holding the
+  chord, sweeping, and letting go of the keys a moment before the button
+  turned a sweep for faces into an ordinary band that selected the whole
+  solid. The keys a band starts with now decide what it is for; keys
+  first pressed partway through a sweep still count, and a Shift band let
+  go of early still adds to the selection.
+
+- **A PDF saved from the file chooser is no longer named `.pdf.pdf`
+  (#39).** Printing sheets to "sheets.pdf" wrote "sheets.pdf.pdf". The
+  chooser adds the chosen format's extension to a name typed without one,
+  but kept a typed extension only when it was a format Export writes, and
+  PDF belongs to `exportpdf` alone. SVG sheets, viewport captures and
+  turntable videos were doubled the same way. A name ending in an extension
+  the chosen format lists now keeps it.
+
+- **The Osnap bar shows when object snaps are off.** Switching snaps off
+  with the bar's On button, the `osnap` command or a key bound to it
+  greyed out On alone, while End, Mid and the other types you had set
+  stayed lit, so the bar with snaps off looked just like the bar with them
+  on, and nothing snapping looked like snapping being broken. The master
+  now reads Off, and the types go quiet with it, a dashed outline instead
+  of a lit button, keeping their settings for when snaps come back on.
+
+- **Scale, Scale1D, Scale2D, Mirror and Rotate work on everything picked on a sheet (#36).**
+  Pick a polyline, a detail or a dimension on a layout, type `scale`, and
+  the command asked for model objects no click on paper can give, so it
+  could only be cancelled. `move` and `rotate` had learned to ask the sheet
+  first; the scale family had not, and being declared model-only it would
+  have refused a paper point anyway. On a sheet they now scale what is
+  picked there, in paper millimetres: paper geometry and pictures as
+  shapes, a detail's frame (its drawing scale kept, so a 1:50 detail stays
+  1:50 and shows more or less of the model), and annotations by their
+  points, with text height, dimension offset and hatch spacing following a
+  uniform scale. `scale1d` moves text and dimensions without distorting
+  them. A locked detail stays put and says so, as it does for `move`.
+  `mirror` had the same fault and works on a sheet too, keeping the
+  original or not as in the model. Text keeps reading forwards and moves to
+  where its mirror image would be, as AutoCAD and Rhino treat text by
+  default; a dimension stays on the mirrored side of what it measures; a
+  hatch's lines turn with it; and a detail frame moves to its mirrored place
+  at its own size, since a view of the model cannot itself be mirrored.
+  Drawing the mirror line on a sheet ghosts the result, as it does in the
+  model, and in both the ghost now stays up while `mirror` asks whether to
+  keep the original: without it, a mirror waiting on that answer looked
+  exactly like one that had done nothing.
+  `rotate` already turned paper geometry and pictures on a sheet but
+  refused a pick with anything else in it; it now turns everything. Notes,
+  which are always drawn level, orbit the pivot and stay level, and a
+  detail frame moves to its turned place at its own size; dimensions,
+  leaders and hatches turn properly. The sheet gumball's rotation ring,
+  offered only when paper geometry alone was picked, now shows for any pick
+  and turns it all the same way, live as you drag, with Alt to turn copies.
+  Shift on its pad, which scaled only notes and paper geometry and quietly
+  moved anything else instead, now scales everything picked the way `scale`
+  does: a detail's frame grows and keeps its drawing scale, and text height,
+  dimension offsets and hatch spacing grow with it.
+
+- **Trim takes the part you click, in one click (#31).** After the cutters,
+  trim asked for the object to trim and then which piece of it to take
+  away: two clicks for one decision. As in Rhino, one click now says both,
+  since where you click is on the part that goes. It goes at once, and trim
+  asks again for the next part until Enter. That needed to know where a
+  click lands on an object, which the selection never recorded, only what
+  it hit; a viewport click now carries the point, and on a solid it is the
+  face you see. A pick with no position, typed, scripted over RPC or chosen
+  from the list a held click offers, still asks which piece, as before.
+
+- **A surface with creases in it measures its true area and volume.**
+  Found on the openNURBS DinerMug while chasing #34: the mug's body read
+  30,852 in area against 38,845 in the render mesh Rhino stores for it, and
+  the whole mug's volume came out negative. The body is one surface whose
+  profile is a chain of patches meeting at creases, and OpenCascade's
+  default measurement samples each face as one smooth piece; across creases
+  the samples miss the short spans where the shape changes. A made-up
+  surface of the same kind read 98% low as a surface of revolution and 24%
+  high once converted to NURBS, with volumes off by as much as double.
+  Area, volume and centroid now split a face at its creases before
+  measuring, which makes each piece smooth and the measurement exact. The
+  mug now reads 42,281 against Rhino's 42,256, and 112,080 in volume
+  against 111,966. A shape with no crease is measured exactly as before.
+
+- **A Rhino face that runs to a pole or round a seam keeps its area (#34).**
+  Some `.3dm` files arrived with a quarter or more of their surface missing,
+  with no error. Keith Sloan compared the whole openNURBS sample set against
+  a face-preserving importer and found 17 files short; `v4_TreeFrog`, one
+  closed 83-face solid, came in as an open surface at 76% of its area, the
+  eyes gone. No face was being dropped. Three things were wrong at once. A
+  loop that runs along a surface's pinched side has a trim with no 3D edge,
+  which the file marks with edge index -1, and the loop builder took that for
+  a trim it could not follow and handed the whole face to the fallbacks,
+  which built the wrong side of it. A loop that walks a seam twice, once each
+  side, cannot be rebuilt from 3D edges alone at all, and the frog's body
+  skin came out at 2.5% of its size. And a watertight shell stayed open
+  because its closed flag, which sewing does not always set, was trusted
+  over measuring. Faces with a pole or a seam are now built from their
+  trims in the surface's own (u, v), where the two sides of a seam are two
+  places, settled by continuity with the trims either side; a face that
+  closes on itself, like a sphere, is now a solid. TreeFrog imports as one
+  solid at 100.2% of its area, the rhino logos from 69% to 96%, MatchSrf
+  from 86% to 97% and DinerMug from 11% to 97%. WishBone, SaltAndPepper,
+  Wheel_PG and the disk brake still read low against the other importer but
+  match the render meshes Rhino stored in the file to within half a percent.
+  T-Joint2 still reads 91% and is not yet explained; its files store no
+  render meshes to check against.
+
+## 0.10.4 — 2026-09-29
+
+### Fixed
+
+- **A SpaceMouse daemon that stops answering no longer freezes the program
+  at launch.** On Linux the SpaceMouse is reached through spacenavd, and
+  the program connected to it with no time limit, at startup and again
+  every five seconds after. A daemon that was running but wedged, its
+  queue full and nothing being accepted, made that connection wait for
+  ever, so Serpentine3D hung at launch with no error, whether or not a
+  SpaceMouse was plugged in. It now gives up after half a second and
+  carries on without the SpaceMouse, trying again later as before.
+
+- **Selecting by name over RPC or MCP selects every object of that name.**
+  With three booths each holding a "Headset", `select(names=["Headset"])`
+  took the first, and the delete after it removed one of three. A name now
+  means every object that has it, an id still means just that one, and the
+  two can be mixed.
+
+- **Objects in an OBJ stay separate when they share a name.** Faces were
+  gathered by name, so three headsets exported as three objects called
+  Meta_Quest came back as one, and three tablets of 22 parts as 22. Every
+  `o` line starts a new object whatever it is called; a `g` name met again
+  inside one object still adds to that group.
+
+- **Importing over RPC or MCP leaves the camera where the modeller put it.**
+  Every import zoomed to fit, which from outside the window means someone
+  else's view jumping each time an assistant adds a part. The bridge's
+  import and a headless `import` keep the view; `zoom_extents` asks for the
+  fit. Import from the menu, a drop or a typed command still fits the view.
+
+- **A script adds a picture with the same inputs whatever the scene holds.**
+  Picture frame asks Add/RemoveAll only when there is already a picture. A
+  script can't see that, so "Add" sent into an empty scene was taken as the
+  image path. With no question asked, an "Add" given anyway still means
+  add, and "RemoveAll" says there is nothing to remove.
+
+- **A picture in the model is drawn in front of what is behind it.**
+  Pictures were drawn before everything else without writing depth, as
+  underlays, so any surface behind one painted over it: a graphic hung a few
+  millimetres in front of a wall could not be seen at all. They are drawn
+  after the objects now and depth-tested, so the wall loses and whatever
+  stands in front still hides them. Each sits a hair back in depth, so a
+  curve traced on the picture's own plane still shows whole on top of it.
+
+- **Snapping works with an imported mesh in the scene.** With an OBJ in the
+  model and the pointer over the pane, asking for a point raised
+  `'MeshShape' object has no attribute 'ShapeType'`: the snap gatherer knew
+  pictures, text and point clouds by name and took everything else for a
+  CAD shape. A mesh has triangles, not CAD edges, so it brings no end, mid
+  or centre points of its own; the nearest point on its outline still snaps.
+
+- **A command started over RPC or MCP that fails part-way is cancelled.**
+  When one of its inputs raised, the command sat at its prompt and every
+  later outside call, undo included, was refused with "Finish or cancel the
+  active CAD command" until someone came back and pressed Escape. The call
+  that starts a command now cleans it up when it fails. A command the
+  modeller has running is still left alone: the call is refused before it
+  can start anything.
+
+- **Importing a .serp adds it to the scene instead of replacing the scene.**
+  Import added every other format to what was there, and said it returned
+  the number of objects added, but a .serp went through the same call and
+  loaded the way Open does. Over the RPC bridge, importing a 72-object file
+  into an 83-object scene left 72, none of them the modeller's; undo got it
+  back. Open and Import had shared one call meaning two things, so now they
+  say which they mean: Open, the template, a file on the command line, a
+  script's `open` and a replayed load still replace; Import, a dropped file
+  and the bridge add. A .serp comes in on layers matched by path, creating
+  what is missing under the same parents, empty layers included, with its
+  blocks, styles, named views and history records following its objects to
+  their new ids. The scene's own units, layouts and current layer stay.
+  Dropping a .serp onto the window now adds it too.
 
 - **Held faces and edges of a solid move together, as one change.** Found
   through the band: a band across a box holds its faces and the edges
@@ -93,12 +464,6 @@
   neither end inside it, and a band dropped in the middle of a big face has
   no corner inside it at all, and both count. Like the click, it adds to
   what is held, takes no objects, and finds no faces in a wireframe view.
-
-- **Open Mica spatial session records.** Mica `.serp` files now open as coloured
-  point clouds with camera routes. Untracked poses break the route, uncertain
-  spans appear as orange dashed segments, and save/reopen does not duplicate the
-  derived curves. Point-cloud Properties presents heuristic surface support,
-  camera/scale provenance, reconstruction backbone and producer limitations.
 
 ## 0.10.3 — 2026-09-19
 
