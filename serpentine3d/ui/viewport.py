@@ -1641,10 +1641,19 @@ class Viewport(QOpenGLWidget):
         drag = self.scene.drag_display
         bounds = []
         for obj in objects:
-            b = obj.bbox()
+            b = obj.mesh.bounds() if obj.mesh_ready else None
+            wm = drag.get(obj.id) if drag else None
             if b is not None:
-                wm = drag.get(obj.id) if drag else None
-                if wm is not None:
+                # the mesh is what is drawn: its local box under the
+                # full pose — the transform, and an in-flight drag on top
+                pose = (wm @ obj._transform) if wm is not None \
+                    else obj._transform
+                if not np.allclose(pose, np.eye(4), atol=1e-12):
+                    b = _pose_box(b, pose)
+            else:
+                b = obj.bbox()
+                if b is not None and wm is not None:
+                    # no mesh yet: the shape's world box, drag on top
                     b = _pose_box(b, wm)
             bounds.append(b)
         boxes = [(i, b) for i, b in enumerate(bounds) if b is not None]
@@ -2298,8 +2307,15 @@ class Viewport(QOpenGLWidget):
                     # object moves with it.
                     anchor = (anchor + wm[:3, 3]) if anchor is not None \
                         else np.asarray(wm[:3, 3], float)
-                omvp = flat @ obj._transform if anchor is None else anchored(mvp, anchor) @ obj._transform
-                oview = flat_view @ obj._transform if anchor is None else anchored(view, anchor) @ obj._transform
+                t = obj._transform
+                if np.allclose(t, np.eye(4), atol=1e-12):
+                    # Unposed: keep the shared arrays, so the uniform cache
+                    # (which matches by identity) sends each matrix once.
+                    omvp = flat if anchor is None else anchored(mvp, anchor)
+                    oview = flat_view if anchor is None else anchored(view, anchor)
+                else:
+                    omvp = flat @ t if anchor is None else anchored(mvp, anchor) @ t
+                    oview = flat_view @ t if anchor is None else anchored(view, anchor) @ t
                 oclips = anchored_clips(clips, anchor)
                 posed = False
             if clips and (anchor is not None or posed or clips_dirty):
