@@ -227,3 +227,56 @@ def test_gumball_scale_across_axes_no_crash():
         tessellate(obj.shape)                 # what the viewport does
         assert not _has_null_surface(obj.shape)
     assert g.volume(scene.get(box.id).shape) > 0
+
+
+class _FakeTimer:
+    """A QElapsedTimer stand-in: elapsed() returns what the test sets,
+    so the paint cap is exact and no real clock is in the test."""
+    value = 5.0
+
+    def elapsed(self):
+        return self.value
+
+    def restart(self):
+        pass
+
+
+def test_gumball_drag_repaints_at_a_capped_rate(monkeypatch):
+    """The reported '5fps' freeze: a gumball drag used to repaint on every
+    mouse move while command previews repaint at a ~30Hz cap, so on a big
+    assembly the drag saturated the main thread and the move command
+    looked smooth by comparison. The drag math still runs on every move;
+    only the repaint is capped, the same way."""
+    vp, scene, sel = _vp()
+    box = scene.add(g.make_box((0, 0, 0), 2, 2, 2))
+    sel.set([box.id])
+    _begin(vp, "move", 0)
+
+    import PySide6.QtCore as qtc
+    monkeypatch.setattr(qtc, "QElapsedTimer", _FakeTimer)
+
+    from PySide6.QtCore import Qt, QPointF
+    pos = QPointF(vp.width() / 2, vp.height() / 2)
+
+    class _Ev:
+        def buttons(self):
+            return Qt.MouseButton.LeftButton
+
+        def modifiers(self):
+            return Qt.KeyboardModifier.NoModifier
+
+    ev = _Ev()
+    updates = []
+    vp.update = lambda *a, **k: updates.append(1)
+
+    _FakeTimer.value = 5.0
+    for _ in range(20):
+        assert vp._move_gumball(pos, ev)
+    # twenty fast moves: the first repaints, the rest are not yet due
+    assert len(updates) == 1
+    # the drag math ran on every move even when the paint was skipped:
+    # the preview data is fresh, only the frame is deferred
+    assert box.id in scene.drag_display
+    _FakeTimer.value = 100.0
+    assert vp._move_gumball(pos, ev)
+    assert len(updates) == 2
