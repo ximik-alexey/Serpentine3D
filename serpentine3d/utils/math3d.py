@@ -121,3 +121,50 @@ def ray_plane(origin: np.ndarray, direction: np.ndarray,
     if t < 0:
         return None
     return origin + t * direction
+
+
+def translation_matrix(offset) -> np.ndarray:
+    """The 4x4 that moves by `offset`."""
+    m = np.eye(4)
+    m[:3, 3] = offset
+    return m
+
+
+def rotation_matrix(center, axis, angle_deg) -> np.ndarray:
+    """The 4x4 of a turn of `angle_deg` about the line through `center`
+    along `axis`: Rodrigues, pivot at the centre. The 3x3 is the one
+    geometry.rotate applies to a mesh, so a shape moved by it through a
+    location lands where the old copy of it would have."""
+    a = np.asarray(axis, float)
+    a = a / np.linalg.norm(a)
+    ang = math.radians(float(angle_deg))
+    K = np.array([[0, -a[2], a[1]], [a[2], 0, -a[0]],
+                  [-a[1], a[0], 0]])
+    R = np.eye(3) + math.sin(ang) * K + (1 - math.cos(ang)) * (K @ K)
+    o = np.asarray(center, float)
+    m = np.eye(4)
+    m[:3, :3] = R
+    m[:3, 3] = o - R @ o
+    return m
+
+
+def scale_matrix(center, factor) -> np.ndarray:
+    """The 4x4 of a uniform scale of `factor` about `center`."""
+    c = np.asarray(center, float)
+    m = np.eye(4)
+    m[:3, :3] *= factor
+    m[:3, 3] = c - m[:3, :3] @ c
+    return m
+
+
+def mirror_matrix(p1, normal) -> np.ndarray:
+    """The 4x4 of the reflection in the plane through `p1` with `normal`,
+    the one geometry.mirror applies to a mesh."""
+    n = np.asarray(normal, float)
+    n = n / np.linalg.norm(n)
+    o = np.asarray(p1, float)
+    R = np.eye(3) - 2 * np.outer(n, n)
+    m = np.eye(4)
+    m[:3, :3] = R
+    m[:3, 3] = o - R @ o
+    return m

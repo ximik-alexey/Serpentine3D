@@ -310,6 +310,8 @@ def make_control_curve(control_points: list[Point], degree: int = 3,
 
 def edges_of(shape) -> list:
     out, seen = [], set()
+    loc = shape.Location()
+    rel = not loc.IsIdentity()
     exp = TopExp_Explorer(shape, occ.EDGE)
     while exp.More():
         # a shell visits a shared edge once per face it belongs to, so dedupe.
@@ -319,6 +321,10 @@ def edges_of(shape) -> list:
         # about the edge, and a freed address handed out again would collide
         # and lose one.
         edge = occ.to_edge(exp.Current())
+        if rel:
+            # a sub-shape of a located shape loses the location; an edge is
+            # only where its parent says it is.
+            edge = edge.Located(loc)
         key = hash(edge)
         if key not in seen:
             seen.add(key)
@@ -329,9 +335,16 @@ def edges_of(shape) -> list:
 
 def faces_of(shape) -> list:
     out = []
+    loc = shape.Location()
+    rel = not loc.IsIdentity()
     exp = TopExp_Explorer(shape, occ.FACE)
     while exp.More():
-        out.append(occ.to_face(exp.Current()))
+        face = occ.to_face(exp.Current())
+        if rel:
+            # a sub-shape of a located shape loses the location; a face is
+            # only where its parent says it is.
+            face = face.Located(loc)
+        out.append(face)
         exp.Next()
     return out
 
@@ -829,7 +842,11 @@ def fillet_edges(shape, radius, edges: list | None = None,
     else:
         from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
         mk = BRepFilletAPI_MakeFillet(shape)
-    targets = edges if edges is not None else edges_of(shape)
+    # ChFi3d's `Add` binding takes a typed edge: an edge picked on a
+    # located shape comes out of `edges_of` as a located shape, so it
+    # is cast back, the same TShape the parent's explorer yields.
+    targets = [occ.to_edge(e)
+               for e in (edges if edges is not None else edges_of(shape))]
     if not targets:
         raise GeometryError("No edges to fillet")
     from OCP.Standard import Standard_Failure

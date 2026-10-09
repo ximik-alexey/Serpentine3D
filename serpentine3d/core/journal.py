@@ -27,7 +27,10 @@ import os
 import sys
 import time
 
+import numpy as np
+
 from . import geometry
+from .scene import _IDENTITY
 
 JOURNAL_DIR = os.path.join(
     os.environ.get("XDG_DATA_HOME",
@@ -43,6 +46,19 @@ STUB_GRACE = 86400.0
 # a journal bigger than this plainly holds more than a stub, and is
 # never opened to find out; the scan only ever spares files
 _STUB_MAX_BYTES = 4096
+
+
+def _same_pose(a, b):
+    """Pose equality: an unposed object is the identity, and a pose that
+    came back where it started compares by value, not by the array
+    object it landed in."""
+    if a is None and b is None:
+        return True
+    if a is None:
+        a = _IDENTITY
+    if b is None:
+        b = _IDENTITY
+    return a is b or np.array_equal(a, b)
 
 # the events that mean somebody built something: a command they ran, or
 # an edit they made by hand outside any command
@@ -389,14 +405,20 @@ class SessionJournal:
                 # by a load, not a hand; note_load covers those
                 if not isinstance(obj._shape, DeferredShape):
                     made.append([oid, obj.name, _b64(obj.shape)])
-            elif obj._shape is not self._shadow[oid]:
-                if isinstance(self._shadow[oid], DeferredShape):
-                    realised = True
-                else:
+            else:
+                s_shape, s_pose = self._shadow[oid]
+                if obj._shape is not s_shape:
+                    if isinstance(s_shape, DeferredShape):
+                        realised = True
+                    else:
+                        chg.append([oid, _b64(obj.shape)])
+                elif not _same_pose(obj._transform, s_pose):
+                    # a move: the same geometry carried elsewhere, and the
+                    # journal has to see it the same way it sees a rebuild
                     chg.append([oid, _b64(obj.shape)])
         for oid in self._shadow:
             if oid not in self.scene.objects:
-                if isinstance(self._shadow[oid], DeferredShape):
+                if isinstance(self._shadow[oid][0], DeferredShape):
                     realised = True     # converted to nothing, removed
                 else:
                     gone.append(oid)
@@ -407,7 +429,8 @@ class SessionJournal:
         return made, chg, gone
 
     def _refresh_shadow(self):
-        self._shadow = {oid: self.scene.objects[oid]._shape
+        self._shadow = {oid: (self.scene.objects[oid]._shape,
+                             self.scene.objects[oid]._transform)
                         for oid in self.scene._order}
         self._note_shadow = self._note_state()
 

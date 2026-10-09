@@ -1,8 +1,19 @@
 """Transform commands: move, copy, rotate, scale, mirror, array."""
 
 from ..core import geometry as g
+from ..utils.math3d import (
+    mirror_matrix,
+    rotation_matrix,
+    scale_matrix,
+    translation_matrix,
+)
 from .base import (
-    IntReq, NumberReq, OptionReq, PointReq, SelectReq, command,
+    IntReq,
+    NumberReq,
+    OptionReq,
+    PointReq,
+    SelectReq,
+    command,
 )
 
 
@@ -105,7 +116,7 @@ def _point_map(fn):
     return lambda p: g.transform_points([tuple(p)], fn)[0]
 
 
-def _do(ctx, held, objs, fn, verb, tail="", action=None):
+def _do(ctx, held, objs, fn, verb, tail="", action=None, matrix=None):
     """Apply `fn` to what is held, or to the objects, and say what happened.
 
     `fn` transforms a shape, which is all a whole object or a control point
@@ -114,12 +125,21 @@ def _do(ctx, held, objs, fn, verb, tail="", action=None):
     ("move", delta), ("rotate", point, axis, degrees) or ("scale", factor).
     Without one they are left alone and said so, which beats transforming
     the whole solid behind your back.
+
+    `matrix` is the 4x4 the operation is, when the command knows one: whole
+    objects moved by it go through `Scene.set_transforms`, where a move is
+    a composed location and the geometry is not copied. A command whose
+    operation is not one (a non-uniform scale, a point map) leaves it out,
+    and the apply-the-function path stands.
     """
     if held:
         _do_to_parts(ctx, held, fn, verb, tail, action)
         return
-    for o in objs:
-        ctx.scene.replace_shape(o.id, fn(o.shape))
+    if matrix is not None:
+        ctx.scene.set_transforms({o.id: matrix for o in objs})
+    else:
+        for o in objs:
+            ctx.scene.replace_shape(o.id, fn(o.shape))
     ctx.echo(f"{verb} {len(objs)} object(s){tail}.")
 
 
@@ -314,7 +334,7 @@ def cmd_move(ctx):
     p2 = yield target
     offset = _offset(p2)
     _do(ctx, held, objs, lambda s: g.translate(s, offset), "Moved",
-        action=("move", offset))
+        action=("move", offset), matrix=translation_matrix(offset))
 
 
 def _copy_on_paper(ctx, lv):
@@ -456,7 +476,8 @@ def cmd_rotate(ctx):
     else:
         _do(ctx, held, objs, lambda s: g.rotate(s, center, axis, angle),
             "Rotated", f" by {angle:g} degrees",
-            action=("rotate", center, axis, angle))
+            action=("rotate", center, axis, angle),
+            matrix=rotation_matrix(center, axis, angle))
 
 
 def _scale_on_paper(ctx, lv, one_way: bool):
@@ -470,6 +491,7 @@ def _scale_on_paper(ctx, lv, one_way: bool):
     import math
 
     import numpy as np
+
     from ..core.layout import transform_sheet_item
     picks = list(lv.selected)
     if not picks:
@@ -568,7 +590,8 @@ def cmd_scale(ctx):
         ctx.echo("Zero scale factor — cancelled.")
         return
     _do(ctx, held, objs, lambda s: g.scale(s, center, factor),
-        "Scaled", f" by {factor:g}", action=("scale", factor))
+        "Scaled", f" by {factor:g}", action=("scale", factor),
+        matrix=scale_matrix(center, factor))
 
 
 @command("scalenu")
@@ -632,6 +655,7 @@ def _mirror_on_paper(ctx, lv):
     import math
 
     import numpy as np
+
     from ..core.layout import copy_sheet_item, transform_sheet_item
     picks = list(lv.selected)
     if not picks:
@@ -716,7 +740,8 @@ def cmd_mirror(ctx):
         # Nothing to ask about keeping the original: a control point is part
         # of a curve, and a spare copy of a corner on its own is not
         # something a curve can have.
-        _do(ctx, held, objs, lambda s: g.mirror(s, p1, normal), "Mirrored")
+        _do(ctx, held, objs, lambda s: g.mirror(s, p1, normal),
+            "Mirrored", matrix=mirror_matrix(p1, normal))
         return
     keep = yield OptionReq("Keep original?", options=["Yes", "No"],
                            default="Yes",

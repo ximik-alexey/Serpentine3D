@@ -12,6 +12,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 
 import numpy as np
+from OCP.gp import gp_Trsf
+from OCP.TopLoc import TopLoc_Location
 
 from . import geometry
 from .deferred import DeferredShape
@@ -54,14 +56,82 @@ def _tess_lock(shape) -> threading.Lock:
                     del _TESS_LOCKS[k]
         return ent[1]
 
+_IDENTITY = np.eye(4)
+
+
+def location_matrix(loc) -> np.ndarray | None:
+    """The 4x4 of a location's transformation, or None for the identity.
+
+    A location is how this build of OCCT carries a shape's pose: the
+    geometry stays in its own coordinates and the world is the location
+    applied to it. `gp_Trsf` holds the 3x4 of it (the 0 0 0 1 row is
+    implicit); `Value` numbers rows and columns from one.
+    """
+    if loc is None or loc.IsIdentity():
+        return None
+    t = loc.Transformation()
+    return np.array([[t.Value(1, 1), t.Value(1, 2), t.Value(1, 3),
+                      t.Value(1, 4)],
+                     [t.Value(2, 1), t.Value(2, 2), t.Value(2, 3),
+                      t.Value(2, 4)],
+                     [t.Value(3, 1), t.Value(3, 2), t.Value(3, 3),
+                      t.Value(3, 4)],
+                     [0.0, 0.0, 0.0, 1.0]])
+
+
+def _trsf_from_matrix(m) -> gp_Trsf | None:
+    """A `gp_Trsf` for a 4x4, if it is one.
+
+    `gp_Trsf` is translation, rotation, uniform scale and mirror, and
+    nothing else: a matrix whose 3x3 part is not a uniform scale of an
+    orthogonal matrix (a shear, a non-uniform scale) cannot be a
+    location, and `SetValues` would keep the coefficients it was given
+    rather than refuse them. The answer is None in that case, and the
+    caller applies the matrix to the geometry instead.
+    """
+    v = np.asarray(m, dtype=float)
+    lin = v[:3, :3]
+    norms = [float(np.linalg.norm(lin[:, i])) for i in range(3)]
+    s = sum(norms) / 3.0
+    if s < 1e-12:
+        return None
+    # Only an isometry rides a location: a scale in it is ignored by
+    # `BRepBndLib` and the like, so a scaled matrix bakes instead.
+    if not np.isclose(s, 1.0, atol=1e-6):
+        return None
+    r = lin / s
+    if not np.allclose(r.T @ r, np.eye(3), atol=1e-6):
+        return None
+    t = gp_Trsf()
+    t.SetValues(*(v[:3, :4].flatten().tolist()))
+    return t
+
+def _fold_location(shape):
+    """`(local shape, location)`: the pose of `shape` pulled out of it.
+
+    A shape can carry its own location (an imported part does). The
+    object stores geometry without the pose and the pose as a location,
+    so an incoming shape is split there.
+    """
+    if shape is None or isinstance(shape, DeferredShape) \
+            or not hasattr(shape, "Location"):
+        return shape, None
+    loc = shape.Location()
+    if loc.IsIdentity():
+        return shape, None
+    return shape.Located(TopLoc_Location()), loc
+
 
 @dataclass
 class SceneObject:
     id: str
     name: str
-    # A TopoDS_Shape, or a DeferredShape standing in for one that has been
-    # read but not converted. Read it through `shape`, which converts what
-    # it finds; the underscore is here so that property can exist at all.
+    # The geometry, in its own coordinates, without the pose. A shape can
+    # arrive carrying a location (an imported part); the scene folds that
+    # into `_location` on the way in, and what is stored stays local.
+    # Read it through `shape`, which converts what it finds and hands
+    # back the world geometry; the underscore is here so that property
+    # can exist at all.
     _shape: object
     kind: str          # curve | surface | solid | point | compound | mesh | pointcloud
     layer_id: str
@@ -79,18 +149,42 @@ class SceneObject:
     draw_order: int = 0                # higher draws on top (breaks depth ties)
     _mesh: DisplayMesh | None = field(default=None, repr=False, compare=False)
     _bounds: tuple | None = field(default=None, repr=False, compare=False)
+    # The pose, as a TopLoc location. Composing a location is a reference
+    # to a transformation, not a copy of the geometry, which is what
+    # makes a move cheap: the TShape stays shared.
+    _location: object = field(default=None, repr=False, compare=False)
+    # The 4x4 view of `_location` for the numpy world (mesh upload,
+    # culling, picking). None means the identity pose.
+    _transform: object = field(default=None, repr=False, compare=False)
     # The scene holding this object, so a bare `.shape` read on something
     # deferred can go through `Scene.realise` and get the whole job — an
     # object that converts to nothing removed, one that converts to two
     # given its sibling — rather than only the shape.
     _scene: object = field(default=None, repr=False, compare=False)
 
+    def __post_init__(self):
+        # The world view of the pose, built once per (geometry, pose)
+        # pair and handed out as the same object until the pair
+        # changes, so a reader that compares by identity sees the same
+        # shape until somebody edits it.
+        self._shape_view = None
+        self._shape_view_for = None
+        self._shape_view_loc = None
+
+    def _view_stale(self):
+        self._shape_view = None
+        self._shape_view_for = None
+        self._shape_view_loc = None
+
     @property
     def shape(self):
-        """This object's geometry, converting it first if it has not been.
+        """This object's geometry in the world, converting it first if it
+        has not been.
 
         Every reader goes through here, which is the point: there is no
-        call site left that can be handed a placeholder by mistake.
+        call site left that can be handed a placeholder by mistake. The
+        pose rides out as a location when it is not the identity, so a
+        reader gets the world geometry without it being copied.
         """
         held = self._shape
         if isinstance(held, DeferredShape):
@@ -101,11 +195,47 @@ class SceneObject:
                 shapes = held.shapes()
                 self._shape = shapes[0] if shapes else None
             held = self._shape
+        if held is None:
+            return None
+        loc = self._location
+        if loc is not None and not loc.IsIdentity():
+            if (self._shape_view is not None
+                    and self._shape_view_for is held
+                    and self._shape_view_loc is loc):
+                return self._shape_view
+            self._shape_view = held.Located(loc)
+            self._shape_view_for = held
+            self._shape_view_loc = loc
+            return self._shape_view
+        self._shape_view = None
         return held
 
     @shape.setter
     def shape(self, value):
+        # A shape can arrive carrying its own location (an imported part).
+        # The pose is held in `_location`, the stored geometry stays
+        # local, and whatever pose this object already had is applied to
+        # the new geometry rather than dropped.
+        loc = None
+        if value is not None and not isinstance(value, DeferredShape) \
+                and hasattr(value, "Location") \
+                and not value.Location().IsIdentity():
+            loc = value.Location()
+            value = value.Located(TopLoc_Location())
+        pose = self.transform
+        if value is not None and not np.array_equal(pose, _IDENTITY):
+            value = geometry.apply_matrix(value, pose)
         self._shape = value
+        self._location = loc
+        self._transform = location_matrix(loc)
+        self._view_stale()
+
+    @property
+    def transform(self) -> np.ndarray:
+        """The 4x4 of this object's pose; the identity when it has none."""
+        if self._transform is None:
+            self._transform = location_matrix(self._location)
+        return self._transform if self._transform is not None else _IDENTITY
 
     @property
     def shape_ready(self) -> bool:
@@ -125,19 +255,20 @@ class SceneObject:
         and on the cave file it cost 747 ms of every frame you orbited
         with the drawing selected.
 
-        Keyed on the shape it measured rather than cleared by hand:
-        geometry is changed here by swapping the shape for a new one, so
-        the answer expires by itself and there is no invalidation to
-        forget at a call site.
+        Keyed on the shape it measured and the pose it was measured
+        under, rather than cleared by hand: both are swapped for new
+        objects when they change, so the answer expires by itself and
+        there is no invalidation to forget at a call site.
         """
         shape = self.shape
         if shape is None:
             return ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
         cached = self._bounds
-        if cached is not None and cached[0] is shape:
-            return cached[1]
+        if (cached is not None and cached[0] is self._shape
+                and cached[1] is self._location):
+            return cached[2]
         box = geometry.bbox(shape)
-        self._bounds = (shape, box)
+        self._bounds = (self._shape, self._location, box)
         return box
 
     @property
@@ -279,12 +410,15 @@ class Scene:
         # out from the shape is exactly the conversion being put off.
         kind = (shape.kind if isinstance(shape, DeferredShape)
                 else geometry.shape_kind(shape))
+        _shape, _loc = _fold_location(shape)
         obj = SceneObject(
             id=uuid.uuid4().hex[:8],
             name=name or self._auto_name(kind),
-            _shape=shape,
+            _shape=_shape,
             kind=kind,
             layer_id=layer_id or self.layers.current_id,
+            _location=_loc,
+            _transform=location_matrix(_loc),
             _scene=self,
         )
         self.objects[obj.id] = obj
@@ -339,10 +473,18 @@ class Scene:
             self.remove(obj_id)
             return None
 
-        obj._shape = shapes[0]
+        _shape, _loc = _fold_location(shapes[0])
+        obj._shape = _shape
+        if _loc is not None:
+            old = obj._location
+            obj._location = (old.Multiplied(_loc)
+                            if old is not None and not old.IsIdentity()
+                            else _loc)
+            obj._transform = location_matrix(obj._location)
         obj._mesh = None
         # The file's word on the kind was a guess made without the geometry.
         obj.kind = geometry.shape_kind(shapes[0])
+        obj._view_stale()
         for extra in shapes[1:]:
             self.add(extra, layer_id=obj.layer_id)
         self.notify("objects")
@@ -385,14 +527,85 @@ class Scene:
             self.notify("objects")
 
     def replace_shape(self, obj_id: str, shape) -> SceneObject:
-        """Swap an object's geometry (transform, boolean result, ...)."""
+        """Swap an object's geometry (transform, boolean result, ...).
+
+        The result of an operation on a located shape is itself located,
+        and the location of a rebuilt geometry is not a pose to keep: it
+        is folded in, the stored geometry stays local, and the pose the
+        object had is what the new geometry already contains.
+        """
         old = self.objects[obj_id]
-        new = replace(old, _shape=shape, kind=geometry.shape_kind(shape),
-                      _mesh=None)
+        _shape, _loc = _fold_location(shape)
+        new = replace(old, _shape=_shape, kind=geometry.shape_kind(shape),
+                      _mesh=None, _location=_loc,
+                      _transform=location_matrix(_loc))
         self.objects[obj_id] = new
         self._regenerate_dependents(obj_id)
         self.notify("objects")
         return new
+
+    def set_transforms(self, transforms: dict) -> int:
+        """Move objects by their 4x4 poses, carried as TopLoc locations.
+
+        A location is a reference to a transformation, not a copy of the
+        geometry: composing it leaves the TShape shared, so moving a
+        thousand objects costs a thousand matrix multiplies, not a
+        thousand B-rep copies. A matrix `gp_Trsf` cannot hold — a shear,
+        a non-uniform scale — is applied to the geometry instead, which
+        is the old cost and the new location is the identity.
+
+        Returns how many of the objects were found.
+        """
+        moved = 0
+        for obj_id, m in transforms.items():
+            obj = self.objects.get(obj_id)
+            if obj is None:
+                continue
+            if self._carry_one(obj, np.asarray(m, dtype=float)):
+                moved += 1
+        if moved:
+            self.notify("objects")
+        return moved
+
+    def _carry_one(self, obj, m) -> bool:
+        """Apply `m` to one object's pose. False if it has no geometry."""
+        if obj._shape is None:
+            return False
+        if isinstance(obj._shape, DeferredShape):
+            # a move that lands on a promise converts it first: the pose
+            # is for the geometry, and the geometry is not there yet.
+            self.realise(obj.id)
+            if obj._shape is None:
+                return False
+        trsf = _trsf_from_matrix(m)
+        # Read the pose before the location changes: the `transform`
+        # property caches on first read, and a read after the new
+        # location is in place would cache the move as the old pose.
+        old = obj._location
+        old_m = obj.transform
+        if trsf is not None and hasattr(obj._shape, "Located"):
+            # The pose is composed, the geometry is not touched. `Multiplied`
+            # applies the argument first, then itself, which is the move
+            # after the pose: the world is m applied to what it was.
+            obj._location = (old.Multiplied(TopLoc_Location(trsf))
+                            if old is not None and not old.IsIdentity()
+                            else TopLoc_Location(trsf))
+            obj._transform = m @ old_m
+            obj._bounds = None
+            obj._view_stale()
+            # The mesh is of the local geometry, and the local geometry
+            # has not moved, so it stays.
+            return True
+        # Not a location — a shear, a non-uniform scale, or a shape that
+        # cannot carry one: apply it to the geometry and start from the
+        # identity, the way a rebuilt geometry does.
+        obj._shape = geometry.apply_matrix(obj._shape, m @ old_m)
+        obj._location = None
+        obj._transform = None
+        obj._mesh = None
+        obj._bounds = None
+        obj._view_stale()
+        return True
 
     def add_record(self, op: str, inputs: list, output: str, **params):
         """Remember how an object was built (record history)."""

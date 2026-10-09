@@ -22,7 +22,14 @@ from OpenGL import GL
 from PySide6.QtCore import Qt
 
 from ..core import geometry as g
-from ..utils.math3d import ray_line_parameter, ray_plane_any
+from ..core.scene import location_matrix
+from ..utils.math3d import (
+    ray_line_parameter,
+    ray_plane_any,
+    rotation_matrix,
+    scale_matrix,
+    translation_matrix,
+)
 
 AXIS_COLORS = ((0.86, 0.33, 0.31), (0.42, 0.72, 0.35), (0.35, 0.55, 0.92))
 HOVER_COLOR = (1.0, 0.85, 0.3)
@@ -42,6 +49,16 @@ def _turned(p, anchor, axis, degrees):
     a = math.radians(degrees)
     return (anchor + v * math.cos(a) + np.cross(k, v) * math.sin(a)
             + k * float(np.dot(k, v)) * (1.0 - math.cos(a)))
+
+
+def _pose_of(shape) -> np.ndarray:
+    """The 4x4 a shape arrived carrying; the identity if it carried none.
+
+    A held original is the shape the drag began on, located when its
+    object had a pose, and the location of that view is the pose.
+    """
+    m = location_matrix(shape.Location())
+    return m if m is not None else np.eye(4)
 
 
 def _alt_held(modifiers) -> bool:
@@ -1821,7 +1838,7 @@ class Gumball:
     def _preview_typed(self):
         val = self._parse_typed()
         if val is None:
-            self._apply(lambda s: s)          # revert to originals
+            self._apply(lambda s: s, matrix_of=lambda s: _pose_of(s))
             self.drag["offset"] = np.zeros(3)
             self.drag["last_label"] = ""
         else:
@@ -1848,16 +1865,17 @@ class Gumball:
     # shape transform says nothing about where a single pole should end up,
     # so each of these says it once, in the two ways it has to be said.
 
-    def _apply_points(self, at, whole):
+    def _apply_points(self, at, whole, matrix_of=None):
         """Held control points and held curve segments take the transform
         as a point map `at`; whole objects take it as the shape transform
-        `whole`."""
+        `whole`, or as the pose `matrix_of` when the operation is one a
+        location can carry."""
         if self.drag.get("cvs"):
             self._apply_cvs(at)
         elif self.drag.get("segments"):
             self._apply_segments(at)
         else:
-            self._apply(whole)
+            self._apply(whole, matrix_of)
 
     def _move_by(self, delta):
         d = self.drag
@@ -1871,19 +1889,25 @@ class Gumball:
                                                  eidx, tuple(delta)))
             return
         self._apply_points(lambda p: p + delta,
-                           lambda s: g.translate(s, tuple(delta)))
+                           lambda s: g.translate(s, tuple(delta)),
+                           lambda s: translation_matrix(delta)
+                           @ _pose_of(s))
 
     def _turn_by(self, anchor, axis, degrees):
         self._apply_points(
             lambda p: _turned(p, anchor, axis, degrees),
-            lambda s: g.rotate(s, tuple(anchor), tuple(axis), degrees))
+            lambda s: g.rotate(s, tuple(anchor), tuple(axis), degrees),
+            lambda s: rotation_matrix(anchor, axis, degrees)
+            @ _pose_of(s))
 
     def _scale_by(self, anchor, axis, value):
         """About `anchor`, along `axis`, or every way if `axis` is None."""
         if axis is None:
             self._apply_points(
                 lambda p: anchor + (p - anchor) * value,
-                lambda s: g.scale(s, tuple(anchor), value))
+                lambda s: g.scale(s, tuple(anchor), value),
+                lambda s: scale_matrix(anchor, value)
+                @ _pose_of(s))
         else:
             self._apply_points(
                 lambda p: p + axis * float(np.dot(p - anchor, axis))
@@ -2040,14 +2064,32 @@ class Gumball:
                 continue
             d["segment_mids"][obj_id] = mids
 
-    def _apply(self, fn):
+    def _apply(self, fn, matrix_of=None):
+        """Put every held object where `fn` says — or where `matrix_of`
+        says, as a pose.
+
+        `matrix_of` is the pose, as a 4x4 of the original shape, when the
+        operation is one a location can carry (a move, a turn, a uniform
+        scale): the scene then composes a location and the geometry is
+        not copied. Anything else is applied as a shape transform, which
+        copies.
+        """
         d = self.drag
         vp = self.vp
         for obj_id, original in d["originals"].items():
             if vp.scene.get(obj_id) is None:
                 continue
             try:
-                vp.scene.replace_shape(obj_id, fn(original))
+                if matrix_of is not None:
+                    obj = vp.scene.get(obj_id)
+                    # `matrix_of` is the pose from the drag's start;
+                    # set_transforms composes, so the amount to compose
+                    # is the way it differs from the pose held now.
+                    vp.scene.set_transforms(
+                        {obj_id: matrix_of(original)
+                         @ np.linalg.inv(obj.transform)})
+                else:
+                    vp.scene.replace_shape(obj_id, fn(original))
             except g.GeometryError:
                 pass
 

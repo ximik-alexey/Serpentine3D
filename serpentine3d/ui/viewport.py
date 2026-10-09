@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import traceback
+import types
 
 import numpy as np
 import shiboken6
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from ..core import linetype as _lt
 from ..core import spatial
+from ..core.scene import _IDENTITY
 from ..utils import config as _cfg
 from ..utils import units as _units
 # Lives in utils so the launcher can set it without importing this
@@ -548,6 +550,20 @@ def anchored(matrix, anchor):
     m = np.array(matrix, np.float64)
     m[:, 3] += m[:, :3] @ anchor
     return m.astype(np.float32)
+
+
+def world_points(points, obj) -> np.ndarray:
+    """`points`, brought to the world through the object's pose.
+
+    Mesh data is local — what the tessellator saw — and a posed object
+    is drawn with the pose folded into the matrix. The pick tests run
+    in the world, so the data comes out through the same pose.
+    """
+    pose = obj.transform
+    if pose is _IDENTITY:
+        return points
+    p = np.asarray(points, np.float64)
+    return (p @ pose[:3, :3].T + pose[:3, 3]).astype(np.float32)
 
 
 def clip_plane_frames(objects):
@@ -2222,9 +2238,24 @@ class Viewport(QOpenGLWidget):
                     GL.glBindVertexArray(self._preview.vao)
                     GL.glDrawArrays(GL.GL_LINES, 0, len(pend))
                 continue
-            omvp = flat if gpu.anchor is None else anchored(mvp, gpu.anchor)
-            oview = flat_view if gpu.anchor is None \
-                else anchored(view, gpu.anchor)
+            pose = obj.transform
+            if pose is _IDENTITY:
+                omvp = flat if gpu.anchor is None \
+                    else anchored(mvp, gpu.anchor)
+                oview = flat_view if gpu.anchor is None \
+                    else anchored(view, gpu.anchor)
+            else:
+                # The mesh is local: what the tessellator saw. The pose
+                # carries it to the world, folded in before the anchor so
+                # the far-grid fix holds for a posed object too.
+                pmvp = pose @ mvp
+                pview = pose @ view
+                omvp = (np.asarray(pmvp, np.float32)
+                       if gpu.anchor is None
+                       else anchored(pmvp, gpu.anchor))
+                oview = (np.asarray(pview, np.float32)
+                        if gpu.anchor is None
+                        else anchored(pview, gpu.anchor))
             oclips = anchored_clips(clips, gpu.anchor)
             if clips and (gpu.anchor is not None or clips_dirty):
                 # The GPU dots the planes with the rebased pos, so an
@@ -2502,11 +2533,16 @@ class Viewport(QOpenGLWidget):
             gpu = self._gpu.get(obj.id)
             if gpu is None or not gpu.tri_count:
                 continue
-            b = obj.mesh.bounds() if obj.mesh_ready else None
+            b = obj.bbox() if obj.mesh_ready else None
             if b is None or b[0][2] < -1e-6:
                 continue                    # below the plane: no stamp
+            pose = obj.transform
+            sm = np.asarray(base @ pose, np.float32) \
+                if pose is not _IDENTITY else smvp
             self._set_mvp(self._line_prog,
-                          smvp if gpu.anchor is None
+                          sm if gpu.anchor is None
+                          else anchored(base @ pose, gpu.anchor)
+                          if pose is not _IDENTITY
                           else anchored(base, gpu.anchor))
             GL.glBindVertexArray(gpu.tri_vao)
             GL.glDrawElements(GL.GL_TRIANGLES, gpu.tri_count,
@@ -3791,7 +3827,7 @@ class Viewport(QOpenGLWidget):
         tessellates it, and one that can never be picked should not be made
         to pay for that.
         """
-        boxed = [(obj, obj.mesh.bounds()) for obj in objects]
+        boxed = [(obj, obj.bbox()) for obj in objects]
         boxed = [(obj, b) for obj, b in boxed if b is not None]
         if not boxed:
             return []
@@ -3933,7 +3969,12 @@ class Viewport(QOpenGLWidget):
                 # Nearest point within the pick radius, over an even
                 # sample of the cloud: a box test would select a room-sized
                 # scan from anywhere inside it, which is everywhere.
-                pt_depth = self._nearest_cloud_point(mesh, eye, px, py, w, h)
+                cmesh = mesh
+                if obj.transform is not _IDENTITY:
+                    cmesh = types.SimpleNamespace(
+                        vertices=world_points(mesh.vertices, obj))
+                pt_depth = self._nearest_cloud_point(cmesh, eye, px, py,
+                                                    w, h)
                 if pt_depth is not None:
                     found.append((pt_depth, obj.id))
                 continue
@@ -3943,10 +3984,11 @@ class Viewport(QOpenGLWidget):
             if shaded_faces:
                 tris, _ = self._near_triangles(mesh, px - r, py - r,
                                                px + r, py + r, w, h)
+                verts = world_points(mesh.vertices, obj)
                 t = ray_triangle_hits(origin, direction,
-                                      mesh.vertices[tris[:, 0]].astype(float),
-                                      mesh.vertices[tris[:, 1]].astype(float),
-                                      mesh.vertices[tris[:, 2]].astype(float))
+                                      verts[tris[:, 0]].astype(float),
+                                      verts[tris[:, 1]].astype(float),
+                                      verts[tris[:, 2]].astype(float))
                 tmin = t.min() if len(t) else np.inf
                 if np.isfinite(tmin):
                     depth = tmin
@@ -3954,7 +3996,7 @@ class Viewport(QOpenGLWidget):
             if len(mesh.edge_segments) and not shaded_faces:
                 segs, _ = self._near_segments(mesh, px - r, py - r,
                                               px + r, py + r, w, h)
-                pts = segs.reshape(-1, 3)
+                pts = world_points(segs, obj).reshape(-1, 3)
                 scr = eye.project(pts, w, h)
                 a, b = scr[0::2], scr[1::2]
                 d2 = _point_segment_dist2(np.array([px, py]), a[:, :2],
@@ -4033,7 +4075,8 @@ class Viewport(QOpenGLWidget):
                                             px + r, py + r, w, h)
             if not len(segs):
                 continue
-            scr = eye.project(segs.reshape(-1, 3), w, h)
+            scr = eye.project(world_points(segs, obj).reshape(-1, 3),
+                              w, h)
             a, b = scr[0::2], scr[1::2]
             d2 = _point_segment_dist2(np.array([px, py]), a[:, :2],
                                       b[:, :2])
@@ -4077,11 +4120,12 @@ class Viewport(QOpenGLWidget):
                                                  px + r, py + r, w, h)
                 if not len(tris):
                     continue
+                verts = world_points(mesh.vertices, obj)
                 t = ray_triangle_hits(
                     origin, direction,
-                    mesh.vertices[tris[:, 0]].astype(float),
-                    mesh.vertices[tris[:, 1]].astype(float),
-                    mesh.vertices[tris[:, 2]].astype(float))
+                    verts[tris[:, 0]].astype(float),
+                    verts[tris[:, 1]].astype(float),
+                    verts[tris[:, 2]].astype(float))
                 i = int(np.argmin(t))
                 if np.isfinite(t[i]) and t[i] < best_t:
                     best_t = t[i]

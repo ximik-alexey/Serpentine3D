@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.10 (2026-10-09)
+
+### Performance
+
+- **Move is a location, not a copy of the geometry.** Moving, turning and
+  uniformly scaling objects composes a TopLoc location on the shared
+  geometry instead of rebuilding the B-rep and re-tessellating it. On an
+  884-part file, moving every object went from about 48 s (1.2 s of
+  rebuilds plus 47 s of re-meshing) to about 0.01 s; the tessellations
+  are kept and the pose is applied at draw time. Operations a location
+  cannot carry (shear, non-uniform scale) and shapes without locations
+  (point clouds) apply the matrix to the geometry, as before.
+
 ## 0.10.9 (2026-10-07)
 
 ### Added
