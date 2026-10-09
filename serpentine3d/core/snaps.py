@@ -193,28 +193,43 @@ def _misses_the_cursor(mesh, camera, cursor, width, height, pad) -> bool:
                 or scr[:, 1].max() < cursor[1] - pad)
 
 
-def _cursor_segments(objects, camera, px, py, width, height, radius_px):
+def _cursor_segments(objects, camera, px, py, width, height, radius_px,
+                     seg_cache=None, tess_catchup=False):
     """Edges of visible objects passing within the pick radius, on screen.
 
     Solids come too. The edge of a box is not a curve object and it is still
     a line you can see, so a rail passing over one crosses something.
+
+    The per-object edge arrays are cached on the mesh's uid: copying them
+    to float is 2652 objects of work per mouse move, and the array is
+    immutable once the mesh is built. The eight-corners test runs for every
+    object, not just the big ones: one corner projection is cheaper than
+    projecting a dozen segments, and on a scene of thousands of objects
+    it is the difference between a snap pass and a frame's whole budget.
     """
     cursor = np.array([float(px), float(py)])
     r2 = float(radius_px) ** 2
     segs = []
     for obj in objects:
+        if not obj.mesh_ready and tess_catchup:
+            # the mesh is being built off-thread; asking for it here
+            # would mesh it on this one
+            continue
         mesh = getattr(obj, "mesh", None)
         edges = getattr(mesh, "edge_segments", None)
         if edges is None or not len(edges):
             continue
-        # eight corners to save projecting the segments is only a saving
-        # when there are more than eight of them, and a drawing made of
-        # single lines has one each
-        if len(edges) > 32 and _misses_the_cursor(mesh, camera, cursor,
-                                                  width, height, radius_px):
+        if _misses_the_cursor(mesh, camera, cursor, width, height,
+                              radius_px):
             continue
-        e = np.asarray(edges, float)
-        a3, b3 = e[:, 0, :], e[:, 1, :]
+        hit = seg_cache.get(obj.id) if seg_cache is not None else None
+        if hit is not None and hit[0] == mesh.uid:
+            a3, b3 = hit[1]
+        else:
+            e = np.asarray(edges, float)
+            a3, b3 = e[:, 0, :], e[:, 1, :]
+            if seg_cache is not None:
+                seg_cache[obj.id] = (mesh.uid, (a3, b3))
         sa = camera.project(a3, width, height)
         sb = camera.project(b3, width, height)
         ab = sb[:, :2] - sa[:, :2]
@@ -233,7 +248,7 @@ def _cursor_segments(objects, camera, px, py, width, height, radius_px):
 
 
 def _apparent_crossings(objects, camera, px, py, width, height,
-                        radius_px) -> list[tuple]:
+                        radius_px, seg_cache=None, tess_catchup=False) -> list[tuple]:
     """Where two edges cross on screen without meeting in space.
 
     A rafter passing over a wall never touches it, so `int` has nothing at
@@ -244,7 +259,7 @@ def _apparent_crossings(objects, camera, px, py, width, height,
     the cursor is already on top of.
     """
     segs = _cursor_segments(objects, camera, px, py, width, height,
-                            radius_px)
+                            radius_px, seg_cache, tess_catchup)
     if len(segs) < 2:
         return []
     flat = getattr(camera, "projection", "perspective") == "parallel"
@@ -298,6 +313,16 @@ class SnapIndex:
         self._cache: dict[str, tuple[int, list]] = {}
         self._int_cache: tuple[int, list] | None = None
         self._cloud_cache = {}
+        # (object id) -> (mesh uid, (a3, b3)): the float copies of the
+        # per-object edge arrays for the screen-space passes. The mesh is
+        # immutable once built and gets a new uid when it is replaced, so
+        # the entry expires by itself.
+        self._seg_cache: dict = {}
+        # (base point, scene revision, curve ids) -> feet: perpendicular
+        # feet depend on the base point and the curves, both of which sit
+        # still for the whole life of a command, so the BRepExtrema sweep
+        # is paid once per base point, not once per mouse move.
+        self._perp_cache = None
         # Set by find() for the duration of a pass: True while the
         # scene is in a catch-up tessellation (many 3D meshes still
         # being built off-thread), so _points skips them instead of
@@ -476,7 +501,9 @@ class SnapIndex:
                 kinds.append("int")
         if self.types.get("appint"):
             for p in _apparent_crossings(objects, camera, px, py, width,
-                                         height, radius_px):
+                                       height, radius_px,
+                                       seg_cache=self._seg_cache,
+                                       tess_catchup=self._tess_catchup):
                 pts.append(p)
                 kinds.append("appint")
         if self.types.get("perp") and base_point is not None:
@@ -506,7 +533,18 @@ class SnapIndex:
         return best
 
     def _perp_feet(self, objects, base_point) -> list:
-        """Feet of perpendiculars from base_point onto visible curves."""
+        """Feet of perpendiculars from base_point onto visible curves.
+
+        The sweep is a kernel call per curve, and a base point sits still
+        for the whole life of the command it belongs to, so the result is
+        cached on (base point, scene revision, the curves present): the
+        first mouse move of a move pays it, the rest are dict hits.
+        """
+        key = (tuple(float(c) for c in base_point), self.scene.revision,
+               tuple(o.id for o in objects if o.kind == "curve"))
+        hit = self._perp_cache
+        if hit is not None and hit[0] == key:
+            return hit[1]
         from OCP.BRepExtrema import BRepExtrema_DistShapeShape
         from .occ import BRepBuilderAPI_MakeVertex, gp_Pnt
         v = BRepBuilderAPI_MakeVertex(
@@ -523,6 +561,7 @@ class SnapIndex:
                         feet.append((p.X(), p.Y(), p.Z()))
             except Exception:
                 continue
+        self._perp_cache = (key, feet)
         return feet
 
     def _near(self, objects, camera, px, py, width, height, radius_px):
@@ -531,8 +570,13 @@ class SnapIndex:
         best_d2 = radius_px ** 2
         cursor = np.array([px, py])
         for obj in objects:
+            if not obj.mesh_ready and self._tess_catchup:
+                continue
             mesh = obj.mesh
             if not len(mesh.edge_segments):
+                continue
+            if _misses_the_cursor(mesh, camera, cursor, width, height,
+                                  radius_px):
                 continue
             seg = mesh.edge_segments
             a3, b3 = seg[:, 0, :].astype(float), seg[:, 1, :].astype(float)
