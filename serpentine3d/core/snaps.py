@@ -73,7 +73,13 @@ def _static_snap_points(shape) -> list[tuple[tuple, str]]:
     from OCP.GeomAbs import GeomAbs_CurveType
     for edge in geometry.edges_of(shape):
         try:
-            ad = occ.edge_adaptor(edge)
+            try:
+                ad = occ.edge_adaptor(edge)
+            except TypeError:
+                # A located parent hands back base-class shape
+                # wrappers (OCP drops the typed edge in .Located());
+                # the adaptor needs the edge back.
+                ad = occ.edge_adaptor(occ.to_edge(edge))
             t0, t1 = ad.FirstParameter(), ad.LastParameter()
             p0, p1 = ad.Value(t0), ad.Value(t1)
             closed = p0.Distance(p1) < 1e-9
@@ -321,9 +327,16 @@ class SnapIndex:
         # and test scenes have to rely on.
         if entry is None and not obj.mesh_ready and self._tess_catchup:
             return []
+        # The candidates are world-space points of the located shape:
+        # a move or a rotate leaves the mesh (and its uid) untouched
+        # and only changes the pose, so the key also carries the
+        # located shape's identity, which changes with the pose and
+        # stays put for the same pose.
+        shape = obj.shape
         mesh_key = obj.mesh.uid
-        if entry is None or entry[0] != mesh_key:
-            entry = (mesh_key, _static_snap_points(obj.shape))
+        if (entry is None or entry[0] != mesh_key
+                or entry[2] is not shape):
+            entry = (mesh_key, _static_snap_points(shape), shape)
             self._cache[obj.id] = entry
         return entry[1]
 
