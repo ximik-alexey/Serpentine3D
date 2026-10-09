@@ -52,6 +52,70 @@ class _MovedGhost:
             self._shape = g.translate(self.base, self.offset)
         return self._shape
 
+def _ghost_mesh(base, parts):
+    """A coarse, wireframe-only mesh of a ghost's base, for a pending move.
+
+    The full tessellator spends its time on the normals, the curvature
+    and the sub-object maps a ghost never draws; this one meshes once,
+    coarsely (5 degrees), and collects only the positions, the triangle
+    indices and the CAD edge polylines, so a whole-compound ghost costs
+    a few seconds, not forty.
+    """
+    import numpy as np
+    from ..core import occ
+    from ..core.geometry import copy_shape
+    from ..core.tessellate import (DisplayMesh, _deflection_for,
+                                  _edge_polyline)
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_Orientation
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopLoc import TopLoc_Location
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+
+    shape = copy_shape(base)
+    deflection = _deflection_for(parts[0])
+    BRepMesh_IncrementalMesh(shape, deflection,
+                             False, 5.0, True)
+    verts, tris = [], []
+    offset = 0
+    exp = TopExp_Explorer(shape, TopAbs_FACE)
+    while exp.More():
+        face = occ.to_face(exp.Current())
+        loc = TopLoc_Location()
+        tri = occ.triangulation(face, loc)
+        if tri is not None:
+            trsf = loc.Transformation()
+            n = tri.NbNodes()
+            v = np.empty((n, 3), np.float64)
+            for i in range(1, n + 1):
+                p = tri.Node(i).Transformed(trsf)
+                v[i - 1] = (p.X(), p.Y(), p.Z())
+            m = tri.NbTriangles()
+            idx = np.empty((m, 3), np.uint32)
+            for i in range(1, m + 1):
+                t = tri.Triangle(i)
+                idx[i - 1] = (t.Value(1) - 1 + offset,
+                             t.Value(2) - 1 + offset,
+                             t.Value(3) - 1 + offset)
+            if face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED:
+                idx = idx[:, ::-1].copy()
+            offset += n
+            verts.append(v)
+            tris.append(idx)
+        exp.Next()
+    if not verts:
+        return None
+    mesh = DisplayMesh(vertices=np.concatenate(verts).astype(np.float32),
+                       triangles=np.concatenate(tris))
+    segs = []
+    for edge in g.edges_of(shape):
+        pts = _edge_polyline(edge, deflection)
+        if pts is not None and len(pts) >= 2:
+            segs.append(np.stack([pts[:-1], pts[1:]], axis=1))
+    if segs:
+        mesh.edge_segments = np.concatenate(segs).astype(np.float32)
+    return mesh
+
+
 def _sheet_ghost(ctx, picks, matrix, size: float = 1.0):
     """What `picks` on a sheet would look like put through `matrix`, as one
     shape to ghost: paper geometry as its shape, everything else as the
@@ -341,8 +405,8 @@ def cmd_move(ctx):
     ghost_ready = {}
     def _prepare_ghost():
         try:
-            from ..core.tessellate import tessellate
-            ghost_ready["mesh"] = tessellate(_base)
+            ghost_ready["mesh"] = _ghost_mesh(_base,
+                                             [o.shape for o in objs])
         except Exception as exc:                          # noqa: BLE001
             ghost_ready["failed"] = str(exc)
     _base = _ghost(objs, lambda s: s)
