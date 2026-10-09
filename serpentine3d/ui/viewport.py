@@ -1380,7 +1380,7 @@ class Viewport(QOpenGLWidget):
     def _paint_dots(self, w, h):
         """Annotation dots: screen-space label bubbles over their anchors."""
         dots = [o for o in self.scene.visible_objects()
-                if o.annotation and len(o.mesh.points)]
+                if o.annotation and o.mesh_ready]
         if not dots:
             return
         from PySide6.QtCore import QRectF
@@ -2252,6 +2252,14 @@ class Viewport(QOpenGLWidget):
             return cached[1]
         vals = []
         for obj in self.scene.visible_objects():
+            # A mesh the background workers have not built yet must not be
+            # tessellated here on the paint thread: on a big file that is
+            # the whole assembly per frame, and every move step invalidates
+            # the cache. The scale is a 95th-percentile estimate, so it is
+            # built over what is ready and rides the default until the
+            # workers catch up.
+            if not obj.mesh_ready:
+                continue
             c = obj.mesh.curvature
             if len(c):
                 vals.append(np.abs(c))
