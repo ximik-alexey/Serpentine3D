@@ -32,13 +32,15 @@ class _MovedGhost:
 
     A move previews the same geometry under a new offset, and tessellating
     the whole compound per tick is the drag killer; a pane that receives
-    this can shift a tessellated cache by the offset instead.
+    this can shift a tessellated cache by the offset instead. `ready` is
+    the box the background thread fills with the tessellated base, so the
+    first tick of the drag does not pay for it.
     """
-    def __init__(self, base, offset, shape):
+    def __init__(self, base, offset, shape, ready=None):
         self.base = base
         self.offset = offset
         self.shape = shape
-
+        self.ready = ready
 
 def _sheet_ghost(ctx, picks, matrix, size: float = 1.0):
     """What `picks` on a sheet would look like put through `matrix`, as one
@@ -322,6 +324,21 @@ def cmd_move(ctx):
     # Keep the plane of the base point even if the target is picked in a
     # different pane, or Vertical is enabled after the base was chosen.
     normal = tuple(float(c) for c in ctx.cplane.normal)
+    # The ghost's base compound is tessellated once, off the main thread,
+    # while the user picks the second point: the first tick of the drag
+    # must not pay for it. The scene's own tess workers are paused during
+    # the interaction, so this thread is the only one meshing.
+    ghost_ready = {}
+    def _prepare_ghost():
+        try:
+            from ..core.tessellate import tessellate
+            ghost_ready["mesh"] = tessellate(_base)
+        except Exception as exc:                          # noqa: BLE001
+            ghost_ready["failed"] = str(exc)
+    _base = _ghost(objs, lambda s: s)
+    if _base is not None:
+        import threading
+        threading.Thread(target=_prepare_ghost, daemon=True).start()
 
     def _offset(p):
         off = tuple(b - a for a, b in zip(p1, p))
@@ -339,12 +356,15 @@ def cmd_move(ctx):
                                lambda s: g.translate(s, offset),
                                action=("move", offset))
         # The ghost of a plain move is the same compound under a new
-        # offset: build it once, and translate the compound per tick
-        # instead of translating every shape.
-        base = getattr(_preview, "base", None)
-        if base is None:
-            base = _preview.base = _ghost(objs, lambda s: s)
-        return _MovedGhost(base, offset, g.translate(base, offset))
+        # offset: translate the compound per tick instead of translating
+        # every shape; the pane shifts the tessellated cache the worker
+        # is building, so no tick pays for the compound.
+        if _base is None:
+            return _preview_of(ctx, held, objs,
+                               lambda s: g.translate(s, offset),
+                               action=("move", offset))
+        return _MovedGhost(_base, offset, g.translate(_base, offset),
+                           ready=ghost_ready)
 
     def _constraints():
         axis = (p1, normal) if ctx.opt("Vertical", "No") == "Yes" else None

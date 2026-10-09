@@ -3192,9 +3192,15 @@ class Viewport(QOpenGLWidget):
                 if cached is not None and cached[0] is shape.base:
                     self._ghost = _shift_mesh(cached[1], shape.offset)
                 else:
-                    base = tessellate(shape.base)
-                    self._ghost_base = (shape.base, base)
-                    self._ghost = _shift_mesh(base, shape.offset)
+                    ready = getattr(shape, "ready", None)
+                    base = ready.get("mesh") if ready is not None else None
+                    if base is None:
+                        # the worker is still meshing the base: draw no
+                        # ghost this tick rather than meshing it here
+                        self._ghost = None
+                    else:
+                        self._ghost_base = (shape.base, base)
+                        self._ghost = _shift_mesh(base, shape.offset)
             else:
                 self._ghost_base = None
                 self._ghost = tessellate(shape)
