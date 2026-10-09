@@ -1605,28 +1605,33 @@ class Viewport(QOpenGLWidget):
             # The pass is minutes on a big file, so it runs on a worker
             # and the last finished result draws until it lands. One pass
             # at a time: a fresh key while one runs is chased after it
-            # finishes, not by queueing a second two-minute stall.
+            # finishes, not by queueing a second two-minute stall. The
+            # shapes list is built in the worker too: reading an object's
+            # shape materializes its located copy, which is a kernel copy
+            # per object, and a drag that moves a thousand of them would
+            # otherwise pay that whole list on the GUI thread.
             self._hlr_inflight = key
-            from ..core.mesh import MeshShape
-            from ..core.pointcloud import PointCloudShape
-            shapes = [o.shape for o in self.scene.visible_objects()
-                      if not isinstance(o.shape,
-                                       (MeshShape, PointCloudShape))]
-            if not shapes:
-                self._tech_cache = (key, {"visible": [], "hidden": []})
-                self._hlr_inflight = None
-            else:
-                fwd = cam.target - cam.position
-                fwd = fwd / max(np.linalg.norm(fwd), 1e-12)
-                right, up = cam.right_up()
-                origin = tuple(cam.target)
-                view_dir = tuple(-fwd)
-                x_dir = tuple(right)
+            fwd = cam.target - cam.position
+            fwd = fwd / max(np.linalg.norm(fwd), 1e-12)
+            right, up = cam.right_up()
+            origin = tuple(cam.target)
+            view_dir = tuple(-fwd)
+            x_dir = tuple(right)
 
-                def work():
-                    while self._interaction:
-                        time.sleep(0.05)
-                    try:
+            def work():
+                while self._interaction:
+                    time.sleep(0.05)
+                from ..core.mesh import MeshShape
+                from ..core.pointcloud import PointCloudShape
+                try:
+                    shapes = [o.shape for o in
+                              self.scene.visible_objects()
+                              if not isinstance(o.shape,
+                                                 (MeshShape,
+                                                  PointCloudShape))]
+                    if not shapes:
+                        data = {"visible": [], "hidden": []}
+                    else:
                         res = _hlr.hlr_project_safe(
                             shapes, origin=origin,
                             view_dir=view_dir, x_dir=x_dir)
@@ -1636,11 +1641,11 @@ class Viewport(QOpenGLWidget):
                             "hidden": _hlr.edges_to_polylines(
                                 res["hidden"]),
                         }
-                    except Exception:                      # noqa: BLE001
-                        data = {"visible": [], "hidden": []}
-                    self._hlrDone.emit(data)
+                except Exception:                      # noqa: BLE001
+                    data = {"visible": [], "hidden": []}
+                self._hlrDone.emit(data)
 
-                self._worker_pool().submit(work)
+            self._worker_pool().submit(work)
         data = (cached[1] if cached is not None
                 else {"visible": [], "hidden": []})
 

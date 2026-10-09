@@ -38,12 +38,16 @@ def test_gumball_follows_geometry_during_move():
     start_anchor = vp.gumball.anchor_and_axes()[0].copy()
     _begin(vp, "move", 2)                      # Z arrow
     vp.gumball.apply_scalar(10.0)              # move +10 along Z
-    # geometry actually moved
-    assert g.bbox(scene.get(box.id).shape)[0][2] == pytest.approx(8)
+    # the move rides the display while the drag is live: the delta
+    # carries it, the pose waits for the commit
+    assert scene.get(box.id).transform[2, 3] == pytest.approx(0, abs=1e-6)
+    assert scene.drag_display[box.id][2, 3] == pytest.approx(10)
     # the drawn gumball anchor tracks it (was the bug: stayed at start)
     drawn = vp.gumball._draw_anchor()[0]
     assert drawn[2] == pytest.approx(start_anchor[2] + 10, abs=1e-6)
-    assert np.linalg.norm(drawn - g_center(scene.get(box.id).shape)) < 1e-6
+    assert np.linalg.norm(drawn
+                          - g_center(scene.get(box.id).shape)
+                          - np.array([0.0, 0.0, 10.0])) < 1e-6
 
 
 def g_center(shape):
@@ -69,8 +73,8 @@ def test_typed_move_commits_exact_distance():
     _begin(vp, "move", 0)                      # X arrow
     for ch in "1", "2", ".", "5":
         assert vp.gumball.type_char(ch)
-    # previews live while typing
-    assert g.bbox(scene.get(box.id).shape)[0][0] == pytest.approx(12.5)
+    # previews live while typing, on the display
+    assert scene.drag_display[box.id][0, 3] == pytest.approx(12.5)
     assert vp.gumball.commit_typed()
     assert vp.gumball.drag is None
     assert g.bbox(scene.get(box.id).shape)[0][0] == pytest.approx(12.5)
@@ -104,9 +108,9 @@ def test_typed_backspace_and_revert():
     sel.set([box.id])
     _begin(vp, "move", 0)
     vp.gumball.type_char("5")
-    assert g.bbox(scene.get(box.id).shape)[0][0] == pytest.approx(5)
+    assert scene.drag_display[box.id][0, 3] == pytest.approx(5)
     vp.gumball.type_char("back")              # buffer empty -> revert
-    assert g.bbox(scene.get(box.id).shape)[0][0] == pytest.approx(0, abs=1e-5)
+    assert scene.drag_display[box.id][0, 3] == pytest.approx(0, abs=1e-5)
     vp.gumball.cancel_drag()
 
 
@@ -121,7 +125,7 @@ def test_move_grid_snaps(monkeypatch):
     # calling apply_scalar with the snapped value the drag path would use
     snapped = round(12.3 / vp.grid_snap_step) * vp.grid_snap_step
     vp.gumball.apply_scalar(snapped)
-    assert g.bbox(scene.get(box.id).shape)[0][0] == pytest.approx(10)
+    assert scene.drag_display[box.id][0, 3] == pytest.approx(10)
 
 
 def test_pad_move_follows_and_cancels():

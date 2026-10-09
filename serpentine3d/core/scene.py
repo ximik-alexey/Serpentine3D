@@ -667,20 +667,24 @@ class Scene:
         old = obj._location
         old_m = obj.transform
         if trsf is not None and hasattr(obj._shape, "Located"):
-            # The pose is composed, the geometry is not touched. The
-            # location is built as m @ old, the same order as `_transform`
-            # below, so both keep describing the one pose: `Multiplied`
-            # applies the argument first, then itself, which is the old
-            # pose with the move applied after it.
-            obj._location = (TopLoc_Location(trsf).Multiplied(old)
-                            if old is not None and not old.IsIdentity()
-                            else TopLoc_Location(trsf))
-            obj._transform = m @ old_m
-            obj._bounds = None
-            obj._view_stale()
-            # The mesh is of the local geometry, and the local geometry
-            # has not moved, so it stays.
-            return True
+                # The pose is composed, the geometry is not touched. The
+                # location is built as m @ old, the same order as `_transform`
+                # below, so both keep describing the one pose: `Multiplied`
+                # applies the argument first, then itself, which is the old
+                # pose with the move applied after it.
+                obj._location = (TopLoc_Location(trsf).Multiplied(old)
+                                if old is not None and not old.IsIdentity()
+                                else TopLoc_Location(trsf))
+                obj._transform = m @ old_m
+                # The bbox cache is keyed on (shape, location) and carries
+                # its local box to the new pose, so the new location
+                # invalidates it by itself: a move stays an 8-corner
+                # transform, and nulling the box here would hand every
+                # moved object back to the cold BRepBndLib sweep.
+                obj._view_stale()
+                # The mesh is of the local geometry, and the local geometry
+                # has not moved, so it stays.
+                return True
         # Not a location — a shear, a non-uniform scale, or a shape that
         # cannot carry one: apply it to the geometry and start from the
         # identity, the way a rebuilt geometry does.

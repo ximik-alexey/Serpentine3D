@@ -22,7 +22,7 @@ from OpenGL import GL
 from PySide6.QtCore import Qt
 
 from ..core import geometry as g
-from ..core.scene import location_matrix
+from ..core.scene import _carry_box, location_matrix
 from ..utils.math3d import (
     ray_line_parameter,
     ray_plane_any,
@@ -99,6 +99,10 @@ class Gumball:
         self._enabled = True           # only when there is no config to ask
         self.hover = None
         self.drag = None          # dict with handle, originals, refs
+        # The deltas of a location-carrying drag, as display-only poses
+        # for the scene's drag_display while the drag is live; end_drag
+        # commits them in one set_transforms, cancel drops them.
+        self._display_pending: dict = {}
         self._geom_cache = None
         self._sweep_key = None    # what _sweep_sources was last asked about
         self._sweep_cache: list = []
@@ -950,6 +954,16 @@ class Gumball:
             # union is one array operation because a per-object numpy loop
             # over a whole drawing costs more than the measuring used to.
             boxes = np.array([o.bbox() for o in objs], float)
+            drag = self.vp.scene.drag_display
+            if drag:
+                # While a drag rides the display, the pose the box was
+                # measured under is not the one being drawn: carry the
+                # dragged objects' boxes by their display delta, so the
+                # anchor tracks the geometry mid-move, not the start.
+                for i, o in enumerate(objs):
+                    wm = drag.get(o.id)
+                    if wm is not None:
+                        boxes[i] = _carry_box(boxes[i], wm)
             anchor = (boxes[:, 0].min(axis=0) + boxes[:, 1].max(axis=0)) / 2
         if self.align == "world" and self.vp._detail_eye() is None:
             return anchor, (np.array([1.0, 0.0, 0.0]),
@@ -2076,20 +2090,30 @@ class Gumball:
         """
         d = self.drag
         vp = self.vp
+        if matrix_of is not None:
+            # A location can carry the operation: while the drag is
+            # live the pose rides the scene's drag_display (a display-
+            # only dict write: no kernel work, no revision, no
+            # notification per mouse move — a drag of a thousand
+            # objects must not wake the scene a thousand times), and
+            # end_drag commits the lot in one set_transforms. The
+            # delta is against the pose the drag began on: the display
+            # never writes that pose, so it is the one the object
+            # still carries.
+            pending = {}
+            for obj_id, original in d["originals"].items():
+                if vp.scene.get(obj_id) is None:
+                    continue
+                pending[obj_id] = (matrix_of(original)
+                                   @ np.linalg.inv(_pose_of(original)))
+            self._display_pending = pending
+            vp.scene.set_drag_display(pending)
+            return
         for obj_id, original in d["originals"].items():
             if vp.scene.get(obj_id) is None:
                 continue
             try:
-                if matrix_of is not None:
-                    obj = vp.scene.get(obj_id)
-                    # `matrix_of` is the pose from the drag's start;
-                    # set_transforms composes, so the amount to compose
-                    # is the way it differs from the pose held now.
-                    vp.scene.set_transforms(
-                        {obj_id: matrix_of(original)
-                         @ np.linalg.inv(obj.transform)})
-                else:
-                    vp.scene.replace_shape(obj_id, fn(original))
+                vp.scene.replace_shape(obj_id, fn(original))
             except g.GeometryError:
                 pass
 
@@ -2177,6 +2201,13 @@ class Gumball:
                         if self.vp.scene.get(i) is not None]
                 if made:
                     self.vp.selection.set(made)
+        if self._display_pending:
+            # The whole drag rode the scene's drag_display; this is the
+            # one set_transforms that writes the poses, so the scene
+            # wakes once, not once a mouse move.
+            self.vp.scene.set_transforms(self._display_pending)
+            self.vp.scene.clear_drag_display()
+            self._display_pending = {}
         self.vp.selection.rebuilding = None
         self.drag = None
 
@@ -2348,6 +2379,11 @@ class Gumball:
         for obj_id, original in d["originals"].items():
             if vp.scene.get(obj_id) is not None:
                 vp.scene.replace_shape(obj_id, original)
+        if self._display_pending:
+            # The drag rode the display only, so cancelling is dropping
+            # the display: the objects never moved at all.
+            vp.scene.clear_drag_display()
+            self._display_pending = {}
         self.vp.window_discard_checkpoint()
         self.vp.selection.rebuilding = None
         self.drag = None
