@@ -1558,13 +1558,7 @@ class Viewport(QOpenGLWidget):
         dragging = bool(QApplication.mouseButtons() & self._nav_button())
         if dragging:
             # fast wireframe preview while navigating
-            self._sync_gpu()
-            view = cam.view_matrix()
-            mvp64 = cam.proj_matrix(w, h) @ view
-            GL.glEnable(GL.GL_DEPTH_TEST)
-            self._draw_objects(mvp64, view, mode_override="wireframe",
-                               light_background=True)
-            GL.glDisable(GL.GL_DEPTH_TEST)
+            self._paint_technical_wireframe(w, h)
             return
 
         key = (self.scene.revision, round(cam.azimuth, 5),
@@ -1572,6 +1566,16 @@ class Viewport(QOpenGLWidget):
                tuple(round(float(c), 4) for c in cam.target))
         cached = getattr(self, "_tech_cache", None)
         if cached is None or cached[0] != key:
+            if self._hlr_on_cooldown():
+                # The last HLR run hit its two-minute budget, so the
+                # worker is still chewing; asking it again only queues
+                # another two-minute main-thread block. Show the
+                # wireframe for now; a timer brings the linework back.
+                self._schedule_hlr_retry()
+                self._paint_technical_wireframe(w, h)
+                return
+            import time as _time
+            t0 = _time.monotonic()
             from ..core.mesh import MeshShape
             from ..core.pointcloud import PointCloudShape
             shapes = [o.shape for o in self.scene.visible_objects()
@@ -1590,6 +1594,11 @@ class Viewport(QOpenGLWidget):
                 }
             else:
                 data = {"visible": [], "hidden": []}
+            now = _time.monotonic()
+            self._hlr_last_try = now
+            self._hlr_slow = now - t0 >= 60.0
+            if self._hlr_slow:
+                self._schedule_hlr_retry()
             self._tech_cache = (key, data)
         data = self._tech_cache[1]
 
@@ -1617,6 +1626,46 @@ class Viewport(QOpenGLWidget):
             GL.glBindVertexArray(self._preview.vao)
             GL.glDrawArrays(GL.GL_LINES, 0, len(allv))
         GL.glEnable(GL.GL_DEPTH_TEST)
+
+    def _paint_technical_wireframe(self, w, h):
+        """The fast wireframe the technical view falls back to while HLR
+        is running or is not affordable: the mesh's own edges, no kernel
+        wait, so the pane never freezes on a big assembly."""
+        cam = self.camera
+        self._sync_gpu()
+        view = cam.view_matrix()
+        mvp64 = cam.proj_matrix(w, h) @ view
+        GL.glEnable(GL.GL_DEPTH_TEST)
+        self._draw_objects(mvp64, view, mode_override="wireframe",
+                           light_background=True)
+        GL.glDisable(GL.GL_DEPTH_TEST)
+
+    def _hlr_on_cooldown(self) -> bool:
+        """Whether the last HLR run was too slow to run again right now.
+
+        A run that hit its two-minute budget leaves the worker still
+        chewing; asking it again only queues another two-minute main-
+        thread block, so while it is on cooldown the pane shows the
+        wireframe and a timer brings the linework back."""
+        import time as _time
+        if not getattr(self, "_hlr_slow", False):
+            return False
+        return _time.monotonic() - getattr(self, "_hlr_last_try", 0.0) < 45.0
+
+    def _schedule_hlr_retry(self):
+        import time as _time
+        self._hlr_last_try = _time.monotonic()
+        timer = getattr(self, "_hlr_retry", None)
+        if timer is None:
+            timer = self._hlr_retry = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(45_000)
+            timer.timeout.connect(self._on_hlr_retry)
+        timer.start()
+
+    def _on_hlr_retry(self):
+        self._hlr_slow = False
+        self.update()
 
     def _cull(self, mvp, objects: list) -> list:
         """`objects`, minus the ones wholly outside the view.

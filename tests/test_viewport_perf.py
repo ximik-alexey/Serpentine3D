@@ -11,6 +11,8 @@ it is the same answer on any machine. The budgets below are deliberately loose
 an exact call sequence.
 """
 
+import time
+
 import numpy as np
 import pytest
 
@@ -367,6 +369,29 @@ def test_picking_does_not_rebuild_the_matrix_more_as_the_scene_grows(gl):
 
     assert many.views <= few.views, (
         f"{few.views} for 20 objects, {many.views} for 200")
+
+
+def test_the_technical_view_does_not_rerun_a_too_slow_hlr():
+    """After an HLR run hits its two-minute budget the pane must not queue
+    another two-minute main-thread block: it shows the wireframe and
+    retries on a timer. The state machine is exact: a slow run cools
+    down, the timer clears it, a fast run never does, and the cooldown
+    expires on its own."""
+    view = _viewport(1)
+    assert not view._hlr_on_cooldown()
+    view._hlr_slow = True
+    view._hlr_last_try = time.monotonic()
+    assert view._hlr_on_cooldown()
+    view._schedule_hlr_retry()
+    assert view._hlr_retry.isActive()
+    view._on_hlr_retry()
+    assert not view._hlr_on_cooldown()
+    view._hlr_slow = True
+    view._hlr_last_try = time.monotonic()
+    view._schedule_hlr_retry()
+    assert view._hlr_on_cooldown()
+    view._hlr_last_try = time.monotonic() - 46.0
+    assert not view._hlr_on_cooldown()
 
 
 def test_a_moved_camera_picks_from_its_new_pose(gl):
