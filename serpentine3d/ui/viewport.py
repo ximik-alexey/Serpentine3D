@@ -972,6 +972,7 @@ class Viewport(QOpenGLWidget):
     textEditRequested = Signal(str)          # editable model text, by id
     paperTextEditRequested = Signal(str)     # editable paper note, by id
     _tessDone = Signal()                    # a background mesh finished
+    _hlrDone = Signal(object)              # a background HLR pass finished
 
     def __init__(self, scene, selection, config=None, parent=None):
         super().__init__(parent)
@@ -1089,6 +1090,9 @@ class Viewport(QOpenGLWidget):
         self._centre_cache: dict[str, np.ndarray] = {}
         self._tessDone.connect(self._on_tess_done,
                                Qt.ConnectionType.QueuedConnection)
+        self._hlrDone.connect(self._on_hlr_done,
+                             Qt.ConnectionType.QueuedConnection)
+        self._hlr_inflight = None           # the key a HLR pass runs for
         self._preview: _LineBatch | None = None
         self._preview_data = np.zeros((0, 3), np.float32)
         self._ghost = None                     # DisplayMesh of pending result
@@ -1551,27 +1555,47 @@ class Viewport(QOpenGLWidget):
                round(cam.elevation, 5),
                tuple(round(float(c), 4) for c in cam.target))
         cached = getattr(self, "_tech_cache", None)
-        if cached is None or cached[0] != key:
+        if (cached is None or cached[0] != key) \
+                and self._hlr_inflight is None:
+            # The pass is minutes on a big file, so it runs on a worker
+            # and the last finished result draws until it lands. One pass
+            # at a time: a fresh key while one runs is chased after it
+            # finishes, not by queueing a second two-minute stall.
+            self._hlr_inflight = key
             from ..core.mesh import MeshShape
             from ..core.pointcloud import PointCloudShape
             shapes = [o.shape for o in self.scene.visible_objects()
-                      if not isinstance(o.shape, (MeshShape, PointCloudShape))]
-            if shapes:
+                      if not isinstance(o.shape,
+                                       (MeshShape, PointCloudShape))]
+            if not shapes:
+                self._tech_cache = (key, {"visible": [], "hidden": []})
+                self._hlr_inflight = None
+            else:
                 fwd = cam.target - cam.position
                 fwd = fwd / max(np.linalg.norm(fwd), 1e-12)
                 right, up = cam.right_up()
-                res = _hlr.hlr_project_safe(shapes, origin=tuple(cam.target),
-                                       view_dir=tuple(-fwd),
-                                       x_dir=tuple(right))
-                data = {
-                    "visible": _hlr.edges_to_polylines(
-                        res["visible"] + res["outline"]),
-                    "hidden": _hlr.edges_to_polylines(res["hidden"]),
-                }
-            else:
-                data = {"visible": [], "hidden": []}
-            self._tech_cache = (key, data)
-        data = self._tech_cache[1]
+                origin = tuple(cam.target)
+                view_dir = tuple(-fwd)
+                x_dir = tuple(right)
+
+                def work():
+                    try:
+                        res = _hlr.hlr_project_safe(
+                            shapes, origin=origin,
+                            view_dir=view_dir, x_dir=x_dir)
+                        data = {
+                            "visible": _hlr.edges_to_polylines(
+                                res["visible"] + res["outline"]),
+                            "hidden": _hlr.edges_to_polylines(
+                                res["hidden"]),
+                        }
+                    except Exception:                      # noqa: BLE001
+                        data = {"visible": [], "hidden": []}
+                    self._hlrDone.emit(data)
+
+                self._worker_pool().submit(work)
+        data = (cached[1] if cached is not None
+                else {"visible": [], "hidden": []})
 
         hidden_segs = []
         for poly in data["hidden"]:
@@ -2123,6 +2147,14 @@ class Viewport(QOpenGLWidget):
         # A mesh arriving is invisible to scene.revision, so say so plainly
         # or the next reconcile is skipped and the object stays a box.
         self._tess_epoch += 1
+        self.update()
+
+    def _on_hlr_done(self, data):
+        # The pass may be a move behind the camera: the result is still
+        # the best hidden-line picture we have, and the next frame
+        # schedules the catch-up for the key we are on now.
+        self._tech_cache = (self._hlr_inflight, data)
+        self._hlr_inflight = None
         self.update()
 
     def _refresh_camera_bounds(self):
