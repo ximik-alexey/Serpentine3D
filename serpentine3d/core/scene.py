@@ -213,7 +213,14 @@ class SceneObject:
                     and self._shape_view_for is held
                     and self._shape_view_loc is loc):
                 return self._shape_view
-            self._shape_view = held.Located(loc)
+            # A Python-subclass shape (text, hatch) loses its type in
+            # the C++ .Located() copy; readers that isinstance on the
+            # shape would stop seeing them once posed. Re-wrap the same
+            # local geometry in the type, over the located copy.
+            if hasattr(held, "rewrap"):
+                self._shape_view = held.rewrap(loc)
+            else:
+                self._shape_view = held.Located(loc)
             self._shape_view_for = held
             self._shape_view_loc = loc
             return self._shape_view

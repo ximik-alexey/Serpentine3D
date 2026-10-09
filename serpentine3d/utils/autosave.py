@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 
 AUTOSAVE_DIR = os.path.join(
@@ -56,6 +57,7 @@ class AutosaveManager:
         self.autosave_path = os.path.join(self.dir,
                                           f"autosave-{self.pid}.serp")
         self._last_saved_revision = -1
+        self._saving = False
         self.doc_path: str | None = None
         self._write_lock()
 
@@ -82,22 +84,44 @@ class AutosaveManager:
         return self.autosave_now()
 
     def autosave_now(self) -> bool:
-        from ..fileio import native
-        tmp = self.autosave_path + ".tmp"
-        try:
-            native.save_scene(self.scene, tmp)
-            os.replace(tmp, self.autosave_path)
-        except Exception:                                     # noqa: BLE001
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
+        """Save the scene to the autosave slot.
+
+        The save walks every object and is seconds at big-file scale, so
+        it runs on a worker thread: the main thread must never sit in it
+        (a 300-second timer tick paying 5+ seconds is a freeze with a
+        countdown). One save at a time; a dirty scene during a save is
+        picked up by the next tick that finds the save done.
+        """
+        if self._saving:
             return False
-        self._last_saved_revision = self.scene.revision
+        self._saving = True
+
+        def work():
+            from ..fileio import native
+            tmp = self.autosave_path + ".tmp"
+            saved = False
+            try:
+                native.save_scene(self.scene, tmp)
+                os.replace(tmp, self.autosave_path)
+                saved = True
+            except Exception:                                     # noqa: BLE001
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+            finally:
+                if saved:
+                    self._last_saved_revision = self.scene.revision
+                self._saving = False
+
+        threading.Thread(target=work, daemon=True).start()
         return True
 
     def clean_exit(self):
-        for p in (self.autosave_path, self.lock_path):
+        # A save in flight dies with the process (daemon thread): its
+        # .tmp is the one artifact the loop above would leave behind.
+        for p in (self.autosave_path, self.autosave_path + ".tmp",
+                  self.lock_path):
             try:
                 os.unlink(p)
             except OSError:

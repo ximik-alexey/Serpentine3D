@@ -13,6 +13,30 @@
   cannot carry (shear, non-uniform scale) and shapes without locations
   (point clouds) apply the matrix to the geometry, as before.
 
+- **Opening a big file no longer freezes the first interaction.** The
+  first bounding-box sweep (11 s on an 884-part file) and the hidden-line
+  pass run on worker threads; the camera's clip bounds land a moment
+  later instead of stalling the frame. Heavy background work
+  (tessellation, pick-index and pick warming, hidden lines, the sweep)
+  pauses while a mouse button is held and resumes on release: a drag is
+  no longer starved by the load's meshing — moving 884 objects while the
+  background sweep was running went from about 11 s to 17 ms.
+
+- **Autosave no longer hitches the UI.** The periodic save runs on a
+  background thread and is deferred while you are dragging, so the
+  300-second save (5 s on an 884-part file) can no longer stall the
+  window; the saved slot is written in the background and cleaned up
+  with its temporary file on exit.
+
+### Fixed
+
+- **Moved text and hatches keep their type.** A pose used to hand out
+  a located copy of the geometry that no longer knew it was text or a
+  hatch, so a moved label lost its insertion-point snaps and its
+  in-place editing. The located view now carries the type with it, and
+  the text's insertion point and bounds are read in world space, at
+  the moved position.
+
 ## 0.10.9 (2026-10-07)
 
 ### Added

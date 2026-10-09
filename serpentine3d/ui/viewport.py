@@ -973,6 +973,7 @@ class Viewport(QOpenGLWidget):
     paperTextEditRequested = Signal(str)     # editable paper note, by id
     _tessDone = Signal()                    # a background mesh finished
     _hlrDone = Signal(object)              # a background HLR pass finished
+    _camBoundsDone = Signal(object)       # a background bbox sweep finished
 
     def __init__(self, scene, selection, config=None, parent=None):
         super().__init__(parent)
@@ -1092,7 +1093,16 @@ class Viewport(QOpenGLWidget):
                                Qt.ConnectionType.QueuedConnection)
         self._hlrDone.connect(self._on_hlr_done,
                              Qt.ConnectionType.QueuedConnection)
+        self._camBoundsDone.connect(self._on_cam_bounds_done,
+                                   Qt.ConnectionType.QueuedConnection)
         self._hlr_inflight = None           # the key a HLR pass runs for
+        self._cam_bounds_inflight = False
+        # True while a mouse button is down. Background OCC work (the
+        # tessellation drain, HLR, the first bbox sweep) time-slices the
+        # GIL with the foreground: a 44-second drain starves a move into
+        # a 44-second drag, which reads as a freeze. The workers park
+        # while this is set and resume on release.
+        self._interaction = False
         self._preview: _LineBatch | None = None
         self._preview_data = np.zeros((0, 3), np.float32)
         self._ghost = None                     # DisplayMesh of pending result
@@ -1579,6 +1589,8 @@ class Viewport(QOpenGLWidget):
                 x_dir = tuple(right)
 
                 def work():
+                    while self._interaction:
+                        time.sleep(0.05)
                     try:
                         res = _hlr.hlr_project_safe(
                             shapes, origin=origin,
@@ -2084,6 +2096,8 @@ class Viewport(QOpenGLWidget):
             return                         # most of a drawing, and never worth
 
         def work():
+            while self._interaction:
+                time.sleep(0.05)
             try:
                 mesh.triangle_index()
                 mesh.segment_index()
@@ -2134,6 +2148,8 @@ class Viewport(QOpenGLWidget):
         self._tess_pending[obj.id] = (obj.shape, _bbox_segments(mn, mx))
 
         def work(target=obj):
+            while self._interaction:
+                time.sleep(0.05)
             try:
                 target.mesh                # locks per shape, sets _mesh
             except Exception:              # noqa: BLE001
@@ -2157,6 +2173,20 @@ class Viewport(QOpenGLWidget):
         self._hlr_inflight = None
         self.update()
 
+    def _on_cam_bounds_done(self, box):
+        # The sweep may be a move behind the scene: the box is still the
+        # best bounds we have, and the next revision change lands the
+        # warm one (a cached sweep is milliseconds).
+        self._cam_bounds_inflight = False
+        if box is not None:
+            if self.grid_visible:
+                extent = float(self._grid_params[0])
+                grid = ((-extent, -extent, 0.0), (extent, extent, 0.0))
+                box = (tuple(min(a, b) for a, b in zip(box[0], grid[0])),
+                       tuple(max(a, b) for a, b in zip(box[1], grid[1])))
+            self.camera.scene_bounds = box
+            self.update()
+
     def _refresh_camera_bounds(self):
         """Tell the camera what the drawing spans, so the clip planes wrap
         the model instead of the zoom (GitHub #5).
@@ -2171,6 +2201,38 @@ class Viewport(QOpenGLWidget):
         if self._cam_bounds_key == key:
             return
         self._cam_bounds_key = key
+        # A cold sweep — the first one after a big load — is seconds of
+        # BRepBndLib, and paying it on the frame is the freeze that
+        # follows opening a file. Cold goes to a worker; the camera
+        # keeps its bounds until the sweep lands.
+        if (any(o._bounds is None for o in self.scene.visible_objects())
+                and not self._cam_bounds_inflight):
+            self._cam_bounds_inflight = True
+
+            def work():
+                # The per-object form of Scene.bbox with a pause between
+                # objects: a sweep is 884 BRepBndLibs, and the one that
+                # follows a big load is the one a first move would race
+                # for the GIL with.
+                try:
+                    objs = self.scene.visible_objects()
+                    boxes = []
+                    for o in objs:
+                        while self._interaction:
+                            time.sleep(0.05)
+                        boxes.append(o.bbox())
+                    if not boxes:
+                        box = None
+                    else:
+                        arr = np.array(boxes, float)
+                        box = (tuple(arr[:, 0].min(axis=0)),
+                               tuple(arr[:, 1].max(axis=0)))
+                except Exception:              # noqa: BLE001
+                    box = None
+                self._camBoundsDone.emit(box)
+
+            self._worker_pool().submit(work)
+            return
         box = self.scene.bbox()
         if self.grid_visible:
             extent = float(self._grid_params[0])
@@ -4293,6 +4355,7 @@ class Viewport(QOpenGLWidget):
         super().mouseDoubleClickEvent(ev)
 
     def mousePressEvent(self, ev):
+        self._interaction = True
         if (ev.button() == Qt.MouseButton.LeftButton
                 and self._inline_text_editor is not None):
             # A click back in the drawing commits direct text editing before
@@ -4622,6 +4685,7 @@ class Viewport(QOpenGLWidget):
         return True
 
     def mouseReleaseEvent(self, ev):
+        self._interaction = False
         self._hold_timer.stop()
         if self._finish_swipe(ev):
             return

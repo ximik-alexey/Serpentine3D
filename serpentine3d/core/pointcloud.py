@@ -101,6 +101,7 @@ class PointCloudShape:
             None if self.level is None else self.level.copy(),
             self.provenance)
 
+
     # -- subsets --
 
     def _take(self, mask_or_index) -> "PointCloudShape":

@@ -7,6 +7,7 @@ import math
 import struct
 
 import numpy as np
+from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS_Compound
 
 from . import geometry, occ
@@ -79,7 +80,13 @@ class TextShape(TopoDS_Compound):
 
     @property
     def origin(self):
-        return tuple(row[3] for row in self._frame[:3])
+        # A posed shape carries its world position in a location; the
+        # origin is read in world space, so the location is applied.
+        from .scene import location_matrix
+        loc = location_matrix(self._brep.Location())
+        if loc is None:
+            return tuple(row[3] for row in self._frame[:3])
+        return tuple((loc @ np.append(self.frame[:3, 3], 1.0))[:3])
 
     @property
     def frame(self) -> np.ndarray:
@@ -133,10 +140,29 @@ class TextShape(TopoDS_Compound):
         return self._from_geometry(self._typography(), self._frame,
                                    geometry.copy_shape(self._brep))
 
+    def rewrap(self, loc=None):
+        """A fresh instance of this type over the same local geometry,
+        sharing it. With `loc`, the geometry is the located copy: the
+        C++ .Located() strips the Python type, so the type has to be
+        put back after the copy, not before it."""
+        brep = self._brep if loc is None else self._brep.Located(loc)
+        return self._from_geometry(self._typography(), self._frame,
+                                   brep)
+
     def snap_points(self):
         """Insertion point and oriented visible bounds in world space."""
         frame = np.asarray(self._frame, dtype=float)
-        local = geometry.apply_matrix(self._brep, np.linalg.inv(frame))
+        # The view can carry a location (the object is posed): the frame
+        # math below works in the frame's own space, so the location is
+        # stripped before it and applied to every result point after the
+        # frame mapping. Without this a moved label's insertion point
+        # stayed where it was, and its corners got the location twice.
+        from .scene import location_matrix
+        loc_m = location_matrix(self._brep.Location())
+        if loc_m is None:
+            loc_m = np.eye(4)
+        plain = self._brep.Located(TopLoc_Location())
+        local = geometry.apply_matrix(plain, np.linalg.inv(frame))
         lo, hi = geometry.bbox(local)
         x0, y0 = lo[:2]
         x1, y1 = hi[:2]
@@ -148,9 +174,15 @@ class TextShape(TopoDS_Compound):
         center = corners.mean(axis=0)
 
         def mapped(points, kind):
-            return [(tuple((frame @ point)[:3]), kind) for point in points]
+            out = []
+            for point in points:
+                p = frame @ point
+                p = loc_m @ p
+                out.append((tuple(p[:3]), kind))
+            return out
 
-        return ([(self.origin, "point")]
+        origin_pt = tuple((loc_m @ np.append(self.frame[:3, 3], 1.0))[:3])
+        return ([(origin_pt, "point")]
                 + mapped(corners, "end")
                 + mapped(mids, "mid")
                 + mapped([center], "center"))

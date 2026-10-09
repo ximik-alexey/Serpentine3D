@@ -2143,6 +2143,11 @@ class MainWindow(QMainWindow):
         self._update_status()
 
     def _autosave_tick(self):
+        # The save is on a worker, but it still time-slices the GIL with
+        # a live drag; park the tick until the button is up.
+        if self.viewport._interaction:
+            QTimer.singleShot(5000, self._autosave_tick)
+            return
         if self.autosave.maybe_autosave():
             self.statusBar().showMessage("Autosaved.", 2500)
 

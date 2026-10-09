@@ -8,6 +8,14 @@ from serpentine3d.core.scene import Scene
 from serpentine3d.utils.autosave import AutosaveManager
 
 
+def _wait_save(mgr, timeout=10.0):
+    """Block until a (now background) save has finished."""
+    import time
+    deadline = time.monotonic() + timeout
+    while mgr._saving:
+        assert time.monotonic() < deadline, "autosave did not finish"
+        time.sleep(0.01)
+
 def test_autosave_and_recovery_cycle(tmp_path):
     d = str(tmp_path)
     scene = Scene()
@@ -16,10 +24,12 @@ def test_autosave_and_recovery_cycle(tmp_path):
     assert os.path.exists(mgr.lock_path)
 
     assert mgr.maybe_autosave() is True
+    _wait_save(mgr)
     assert os.path.exists(mgr.autosave_path)
     assert mgr.maybe_autosave() is False       # unchanged -> skipped
     scene.add(g.make_sphere((5, 0, 0), 1))
     assert mgr.maybe_autosave() is True
+    _wait_save(mgr)
 
     # simulate a crash: fake a dead session's lockfile
     stale_lock = os.path.join(d, "session-999999.json")
@@ -41,6 +51,7 @@ def test_autosave_and_recovery_cycle(tmp_path):
     assert scene2.find_by_name("Crash Box") is not None
     assert not os.path.exists(stale_lock)
     # the recovered state was immediately re-protected
+    _wait_save(mgr2)
     assert os.path.exists(mgr2.autosave_path)
 
     # live sessions are never offered
@@ -52,6 +63,7 @@ def test_clean_exit_removes_files(tmp_path):
     scene.add(g.make_box((0, 0, 0), 1, 1, 1))
     mgr = AutosaveManager(scene, str(tmp_path))
     mgr.autosave_now()
+    _wait_save(mgr)
     mgr.clean_exit()
     assert not os.path.exists(mgr.lock_path)
     assert not os.path.exists(mgr.autosave_path)

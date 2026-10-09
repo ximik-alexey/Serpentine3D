@@ -145,6 +145,14 @@ class HatchShape(TopoDS_Compound):
                                 self._pattern, self._angle, self._spacing,
                                 self._frame)
 
+    def rewrap(self, loc=None):
+        # A fresh wrapper over the same region, shared; with `loc` the
+        # region is the located copy, so the Python type survives the
+        # C++ .Located() strip.
+        region = self._region if loc is None else self._region.Located(loc)
+        return self._from_parts(region, self._pattern, self._angle,
+                                self._spacing, self._frame)
+
     def to_curves(self) -> list:
         """The boundary as ordinary closed curves, outer and holes."""
         wires = []
