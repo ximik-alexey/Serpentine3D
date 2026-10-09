@@ -541,6 +541,22 @@ def rebased(pts, anchor):
     if anchor is None:
         return np.ascontiguousarray(pts, np.float32)
     return (np.asarray(pts, np.float64) - anchor).astype(np.float32)
+def _shift_mesh(mesh, offset):
+    """The ghost mesh moved by `offset`, without touching the original.
+
+    A translation moves the position arrays and leaves the normals, the
+    curvature and the index arrays alone; a ghost is display-only, so the
+    shift is a copy of four arrays, not a rebuild.
+    """
+    from dataclasses import replace
+    off = np.asarray(offset, float)
+    return replace(
+        mesh,
+        vertices=mesh.vertices + off,
+        edge_segments=mesh.edge_segments + off,
+        iso_segments=mesh.iso_segments + off,
+        points=mesh.points + off,
+    )
 
 
 def anchored(matrix, anchor):
@@ -1106,6 +1122,8 @@ class Viewport(QOpenGLWidget):
         self._preview: _LineBatch | None = None
         self._preview_data = np.zeros((0, 3), np.float32)
         self._ghost = None                     # DisplayMesh of pending result
+        self._ghost_base = None               # (base compound, its mesh) of a
+                                             # move ghost, shifted per tick
         self._ghost_picture = None             # textured pending picture
         self._inline_text_editor = None
         self._inline_text_id = None
@@ -3161,11 +3179,25 @@ class Viewport(QOpenGLWidget):
         if shape is None:
             if self._ghost is not None or had_picture or had_note:
                 self._ghost = None
+                self._ghost_base = None
                 self.update()
             return
         try:
             from ..core.tessellate import tessellate
-            self._ghost = tessellate(shape)
+            if hasattr(shape, "base") and hasattr(shape, "offset"):
+                # A move ghost is the same geometry under a new offset:
+                # the tessellated cache shifts with it, and the compound is
+                # tessellated only when its base changes.
+                cached = getattr(self, "_ghost_base", None)
+                if cached is not None and cached[0] is shape.base:
+                    self._ghost = _shift_mesh(cached[1], shape.offset)
+                else:
+                    base = tessellate(shape.base)
+                    self._ghost_base = (shape.base, base)
+                    self._ghost = _shift_mesh(base, shape.offset)
+            else:
+                self._ghost_base = None
+                self._ghost = tessellate(shape)
         except Exception:                                  # noqa: BLE001
             self._ghost = None
         self.update()

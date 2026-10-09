@@ -27,6 +27,19 @@ def _ghost(objs, fn):
                             for s in shapes])
 
 
+class _MovedGhost:
+    """A translated compound that remembers its un-moved base.
+
+    A move previews the same geometry under a new offset, and tessellating
+    the whole compound per tick is the drag killer; a pane that receives
+    this can shift a tessellated cache by the offset instead.
+    """
+    def __init__(self, base, offset, shape):
+        self.base = base
+        self.offset = offset
+        self.shape = shape
+
+
 def _sheet_ghost(ctx, picks, matrix, size: float = 1.0):
     """What `picks` on a sheet would look like put through `matrix`, as one
     shape to ghost: paper geometry as its shape, everything else as the
@@ -319,8 +332,19 @@ def cmd_move(ctx):
 
     def _preview(p):
         offset = _offset(p)
-        return _preview_of(ctx, held, objs, lambda s: g.translate(s, offset),
-                           action=("move", offset))
+        if any(v for k, v in held.items() if k in
+               ("cv", "segment", "face", "edge")):
+            # partial sub-object moves keep the generic path
+            return _preview_of(ctx, held, objs,
+                               lambda s: g.translate(s, offset),
+                               action=("move", offset))
+        # The ghost of a plain move is the same compound under a new
+        # offset: build it once, and translate the compound per tick
+        # instead of translating every shape.
+        base = getattr(_preview, "base", None)
+        if base is None:
+            base = _preview.base = _ghost(objs, lambda s: s)
+        return _MovedGhost(base, offset, g.translate(base, offset))
 
     def _constraints():
         axis = (p1, normal) if ctx.opt("Vertical", "No") == "Yes" else None
