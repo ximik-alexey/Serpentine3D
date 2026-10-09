@@ -277,13 +277,16 @@ class SceneObject:
         # holding. The scene drops it, but whoever was already iterating
         # still has it and will ask; an empty mesh draws nothing, which is
         # the right picture, where the kernel would raise on the way there.
+        # The mesh is of the local geometry: the pose carries it to the
+        # world at draw time, so the tessellator is handed the shape
+        # without its location, not the located view.
         shape = self.shape
         if shape is None:
             return DisplayMesh()
         if self._mesh is None:
-            with _tess_lock(shape):
+            with _tess_lock(self._shape):
                 if self._mesh is None:
-                    self._mesh = tessellate(shape)
+                    self._mesh = tessellate(self._shape)
         return self._mesh
 
     @property
