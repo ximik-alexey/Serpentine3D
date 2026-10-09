@@ -1530,6 +1530,8 @@ class MainWindow(QMainWindow):
         # whichever pane the cursor is in, which is not the same as the one
         # last clicked in: the whole point of picking across panes is that
         # you can leave the one you started in without clicking on the way
+        import time
+        t0 = time.perf_counter()
         self._refresh_rubber(point, source=self.sender())
         req = self.processor.request
         if isinstance(req, PointReq) and getattr(req, "preview_fn", None):
@@ -1545,6 +1547,10 @@ class MainWindow(QMainWindow):
                 ghost = self.processor.preview_for(point)
                 for vp in self.all_viewports():
                     vp.set_ghost(ghost)
+        dt = time.perf_counter() - t0
+        if dt > 0.03:
+            print(f"serp3d-perf: mouse-event {dt*1000:.0f} ms",
+                  file=sys.stderr)
 
     def _refresh_rubber(self, cursor, source=None):
         """`source` is the pane the cursor is in, and gets the number."""
