@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.10.10 (unreleased)
+
+### Fixed
+
+- **Moving a big selection no longer freezes the viewport.** A committed
+  move marks the geometry's composed cache stale instead of dropping it:
+  the display shows the new pose from the first frame (a pose is a
+  matrix, not a copy), a few objects are re-composed per frame, and no
+  interaction pays for re-copying a whole moved selection at once — the
+  two-to-three-second stall a committed select-all move used to cost
+  before the next one.
+
+- **Gumball drags repaint at a capped rate.** Like the command
+  previews, a gumball drag repaints no more often than every 33 ms; the
+  drag math still runs on every mouse move, and the release paints the
+  final state.
+
+- **The technical view no longer blocks on an HLR that will not finish.**
+  On a big assembly a hidden-line run hits its two-minute budget and used
+  to stall the pane's main thread after every commit and camera move. A
+  run that comes back slow puts the pane on a 45 s cooldown — wireframe
+  now, linework when the worker is clear — and small scenes are
+  unchanged.
+
+- **Object snaps are ~15× faster on big models.** Snap queries pre-filter
+  the scene with a screen-space box before the per-object math, so a
+  cursor over an 884-part assembly costs 3.6 ms instead of 53 ms.
+
 ## 0.10.9 (2026-10-07)
 
 ### Added

@@ -2073,6 +2073,7 @@ class Viewport(QOpenGLWidget):
           with no change to the scene at all.
         """
         _flush_buffer_deletes()
+        self._warm_composed()
         key = self._gpu_sync_key()
         if self._gpu_synced == key:
             return
@@ -2113,6 +2114,26 @@ class Viewport(QOpenGLWidget):
             self._centre_cache = {uid: c for uid, c
                                   in self._centre_cache.items()
                                   if uid in live_meshes}
+
+    def _warm_composed(self, budget: int = 24):
+        """Re-compose the shapes a move left stale, a few per frame.
+
+        A move marks the composed-shape cache stale rather than dropping
+        it: the cached B-rep is the geometry at the previous pose, which
+        is what a paint, a pick and a cull want while the warm-up catches
+        up (the mesh shows the new pose from the first frame, because a
+        pose is a matrix, not a copy). Re-building the whole moved
+        selection in one frame is the two-to-three-second freeze a
+        committed move used to cost on the next interaction, so the
+        rebuild spreads: 24 objects a frame is about a millisecond, and a
+        full 884-part selection is warm again in well under a second."""
+        for obj in self._gpu_candidates():
+            if budget <= 0:
+                break
+            if not obj._shape_stale:
+                continue
+            obj._recompose_shape()
+            budget -= 1
 
     def _worker_pool(self):
         if self._tess_pool is None:

@@ -91,8 +91,13 @@ class SceneObject:
     # given its sibling — rather than only the shape.
     _scene: object = field(default=None, repr=False, compare=False)
     # Cache of the composed (local @ _transform) shape, so repeated .shape
-    # reads after a move do not re-copy the B-rep every time.
+    # reads after a move do not re-copy the B-rep every time. A move does
+    # not drop the cache, it marks it `_shape_stale`: the cached B-rep is
+    # the geometry at the previous pose, which a paint, pick and cull want
+    # while a per-frame warm-up re-composes it (a one-shot re-composition
+    # of a whole moved selection is the freeze this deferral removes).
     _shape_composed: object = field(default=None, repr=False, compare=False)
+    _shape_stale: bool = field(default=False, repr=False, compare=False)
     @property
     def shape(self):
         """This object's geometry in world space, converting it first if
@@ -102,8 +107,12 @@ class SceneObject:
         call site left that can be handed a placeholder by mistake. The
         pose is composed on demand (a B-rep copy only when the pose is
         not identity) rather than baked in at move time, so a move is a
-        numpy multiply, not a geometry copy. The composed shape is cached
-        so repeated reads after a move do not re-copy the B-rep.
+        numpy multiply, not a geometry copy. The composed shape is
+        cached, and a move marks that cache stale rather than dropping
+        it: a read of a stale object gets the previous pose — a valid
+        B-rep, a cache hit — until the viewport's per-frame warm-up
+        re-composes it, so no reader ever pays for a whole moved
+        selection in one frame.
         """
         held = self._shape
         if isinstance(held, DeferredShape):
@@ -123,14 +132,44 @@ class SceneObject:
             return self._shape_composed
         composed = geometry.apply_matrix(held, t)
         self._shape_composed = composed
+        self._shape_stale = False
         return composed
+
+    def _recompose_shape(self):
+        """Replace the composed cache with one at the current pose.
+
+        The viewport's per-frame warm-up calls this for the objects a
+        move left stale, a few per frame; a plain .shape read never
+        pays for it (re-copying a whole moved selection in one frame
+        is the freeze the deferral removes)."""
+        if not self._shape_stale:
+            return
+        held = self._shape
+        if isinstance(held, DeferredShape):
+            scene = self._scene
+            if scene is not None:
+                scene.realise(self.id)
+            else:
+                shapes = held.shapes()
+                self._shape = shapes[0] if shapes else None
+            held = self._shape
+        if held is None:
+            self._shape_stale = False
+            return
+        t = self._transform
+        if np.allclose(t, np.eye(4), atol=1e-12):
+            self._shape_composed = None
+            self._shape_stale = False
+            return
+        self._shape_composed = geometry.apply_matrix(held, t)
+        self._shape_stale = False
 
     @shape.setter
     def shape(self, value):
         self._shape = value
         self._transform = np.eye(4, dtype=np.float64)
         self._shape_composed = None
-
+        self._shape_stale = False
     @property
     def shape_ready(self) -> bool:
         """Whether the geometry exists, as opposed to a promise of it.
@@ -444,7 +483,7 @@ class Scene:
         old = self.objects[obj_id]
         new = replace(old, _shape=shape, kind=geometry.shape_kind(shape),
                       _mesh=None, _transform=np.eye(4, dtype=np.float64),
-                      _shape_composed=None)
+                      _shape_composed=None, _shape_stale=False)
         self.objects[obj_id] = new
         self._regenerate_dependents(obj_id)
         self.notify("objects")
@@ -480,8 +519,15 @@ class Scene:
         copy (the original stands untouched, so an undo snapshot and a
         journal shadow keyed on the old handle stay true), the mesh is
         carried in numpy (no re-tessellation), and the box is taken from
-        the carried vertices (no kernel walk). One batched notification for
-        any number of objects.
+        the carried vertices (no kernel walk). One batched notification
+        for any number of objects.
+
+        A move up to 25 objects re-composes its composed-shape caches
+        here — a few B-rep copies is a few milliseconds, and a reader
+        right after the commit sees the new pose. A bigger one leaves
+        them marked stale: the viewport's per-frame warm-up re-composes
+        them, so no reader pays for the whole moved selection in one
+        frame (the two-to-three-second freeze a committed ctrl+a move
         """
         with self.batched():
             updates = {
@@ -490,6 +536,9 @@ class Scene:
                 if (new := self._carry_one(obj_id, m)) is not None
             }
             if updates:
+                if len(updates) <= 25:
+                    for new in updates.values():
+                        new._recompose_shape()
                 self.objects.update(updates)
                 self.notify("objects")
 
@@ -510,7 +559,7 @@ class Scene:
         if obj._shape is None:
             return None
         new_transform = m @ obj._transform
-        return replace(obj, _transform=new_transform, _shape_composed=None)
+        return replace(obj, _transform=new_transform, _shape_stale=True)
 
     def add_record(self, op: str, inputs: list, output: str, **params):
         """Remember how an object was built (record history)."""
