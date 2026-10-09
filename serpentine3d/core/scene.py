@@ -79,6 +79,25 @@ def location_matrix(loc) -> np.ndarray | None:
                      [0.0, 0.0, 0.0, 1.0]])
 
 
+def _carry_box(box: tuple, m: np.ndarray) -> tuple:
+    """The (lo, hi) box moved by the 4x4 `m`.
+
+    The box is axis-aligned, so its image under a translation, rotation
+    or uniform scale is the min/max of the eight carried corners — the
+    tight answer for the isometries a pose is, in eight transforms
+    instead of a remeasure of the shape.
+    """
+    lo = np.asarray(box[0], float)
+    hi = np.asarray(box[1], float)
+    corners = np.array([[x, y, z]
+                       for x in (lo[0], hi[0])
+                       for y in (lo[1], hi[1])
+                       for z in (lo[2], hi[2])])
+    carried = (corners @ np.asarray(m, float)[:3, :3].T
+               + np.asarray(m, float)[:3, 3])
+    return (tuple(carried.min(axis=0)), tuple(carried.max(axis=0)))
+
+
 def _trsf_from_matrix(m) -> gp_Trsf | None:
     """A `gp_Trsf` for a 4x4, if it is one.
 
@@ -159,6 +178,11 @@ class SceneObject:
     draw_order: int = 0                # higher draws on top (breaks depth ties)
     _mesh: DisplayMesh | None = field(default=None, repr=False, compare=False)
     _bounds: tuple | None = field(default=None, repr=False, compare=False)
+    # The box of the local geometry, in the geometry's own coordinates.
+    # Survives a pose change, which only moves the world box: a move
+    # must not cost a remeasure of the geometry.
+    _local_bounds: tuple | None = field(default=None, repr=False,
+                                        compare=False)
     # The pose, as a TopLoc location. Composing a location is a reference
     # to a transformation, not a copy of the geometry, which is what
     # makes a move cheap: the TShape stays shared.
@@ -275,7 +299,10 @@ class SceneObject:
         Keyed on the shape it measured and the pose it was measured
         under, rather than cleared by hand: both are swapped for new
         objects when they change, so the answer expires by itself and
-        there is no invalidation to forget at a call site.
+        there is no invalidation to forget at a call site. A pose change
+        alone does not invalidate the geometry: the local box is kept in
+        `_local_bounds` and carried to the new pose, so a move costs an
+        8-corner transform, not a remeasure of the shape.
         """
         shape = self.shape
         if shape is None:
@@ -284,7 +311,29 @@ class SceneObject:
         if (cached is not None and cached[0] is self._shape
                 and cached[1] is self._location):
             return cached[2]
+        local = self._local_bounds
+        if (local is not None and local[0] is self._shape
+                and self._location is not None
+                and not self._location.IsIdentity()):
+            m = location_matrix(self._location)
+            if m is not None:
+                box = _carry_box(local[1], m)
+                self._bounds = (self._shape, self._location, box)
+                return box
         box = geometry.bbox(shape)
+        # The box of the geometry in its own coordinates: the world box
+        # carried back by the inverse location. One extra 8-corner pass on
+        # first measure, so a later pose change never needs the OCC.
+        if self._location is not None:
+            inv = location_matrix(self._location)
+            if inv is not None:
+                inv = np.linalg.inv(inv)
+                local_box = _carry_box(box, inv)
+            else:
+                local_box = box
+        else:
+            local_box = box
+        self._local_bounds = (self._shape, local_box)
         self._bounds = (self._shape, self._location, box)
         return box
 
