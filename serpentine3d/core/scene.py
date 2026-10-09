@@ -376,6 +376,9 @@ class Scene:
         self._batch_depth = 0           # see batched()
         self._batched_kinds: set[str] = set()
         self.revision = 0               # bumped on every change notification
+        # In-flight previews (a command dragging a whole object, a gumball
+        # drag): id -> 4x4. Display only, see set_drag_display.
+        self.drag_display: dict = {}
         self.named_views: dict = {}     # name -> camera params
         # Objects showing their control points. Kept here rather than on a
         # viewport because points on is something the drawing is doing: turn
@@ -635,6 +638,17 @@ class Scene:
         if moved:
             self.notify("objects")
         return moved
+
+    def set_drag_display(self, transforms):
+        """Show `transforms` (id -> 4x4) while the shapes stand where they
+        were. Display only: no revision, no notification — a drag of a few
+        hundred objects must not wake the scene on every mouse move."""
+        self.drag_display = {k: np.asarray(v, float)
+                             for k, v in transforms.items()}
+
+    def clear_drag_display(self):
+        """The drag is over; the carried shapes are the truth again."""
+        self.drag_display = {}
 
     def _carry_one(self, obj, m) -> bool:
         """Apply `m` to one object's pose. False if it has no geometry."""

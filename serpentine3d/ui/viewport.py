@@ -568,18 +568,37 @@ def anchored(matrix, anchor):
     return m.astype(np.float32)
 
 
-def world_points(points, obj) -> np.ndarray:
+def world_points(points, obj, pose=None) -> np.ndarray:
     """`points`, brought to the world through the object's pose.
 
     Mesh data is local — what the tessellator saw — and a posed object
     is drawn with the pose folded into the matrix. The pick tests run
-    in the world, so the data comes out through the same pose.
+    in the world, so the data comes out through the same pose. An
+    in-flight drag comes in as `pose`: the display matrix on top of
+    the stored one, the same order the drawing uses.
     """
-    pose = obj.transform
+    pose = pose if pose is not None else obj.transform
     if pose is _IDENTITY:
         return points
     p = np.asarray(points, np.float64)
     return (p @ pose[:3, :3].T + pose[:3, 3]).astype(np.float32)
+
+
+def _pose_box(box, m):
+    """The eight corners of a local `box` in the world of a 4x4 `m`.
+
+    Exact for the poses this app makes (rigid, similarity); it over-covers
+    a shear, which only ever makes the box slightly too big.
+    """
+    lo, hi = np.asarray(box[0], float), np.asarray(box[1], float)
+    corners = np.array([
+        [lo[0], lo[1], lo[2]], [hi[0], lo[1], lo[2]],
+        [lo[0], hi[1], lo[2]], [hi[0], hi[1], lo[2]],
+        [lo[0], lo[1], hi[2]], [hi[0], lo[1], hi[2]],
+        [lo[0], hi[1], hi[2]], [hi[0], hi[1], hi[2]]])
+    w = np.asarray(m, float)
+    return (corners @ w[:3, :3].T + w[:3, 3]).min(axis=0), \
+        (corners @ w[:3, :3].T + w[:3, 3]).max(axis=0)
 
 
 def clip_plane_frames(objects):
@@ -1122,11 +1141,6 @@ class Viewport(QOpenGLWidget):
         self._preview: _LineBatch | None = None
         self._preview_data = np.zeros((0, 3), np.float32)
         self._ghost = None                     # DisplayMesh of pending result
-        self._ghost_pose = None               # a move/rotate ghost's 4x4,
-                                             # in the draw matrix
-        self._ghost_base = None               # (base compound, its mesh) of a
-                                             # move ghost, drawn with the
-                                             # offset in the matrix
         self._ghost_picture = None             # textured pending picture
         self._inline_text_editor = None
         self._inline_text_id = None
@@ -1676,9 +1690,13 @@ class Viewport(QOpenGLWidget):
         if not objects:
             return objects
         boxes = []
+        drag = self.scene.drag_display
         for i, obj in enumerate(objects):
             b = obj.bbox()
             if b[0] != b[1]:
+                wm = drag.get(obj.id)
+                if wm is not None:
+                    b = _pose_box(b, wm)
                 boxes.append((i, b))
         if not boxes:
             return objects              # nothing to judge them on: draw them
@@ -1971,6 +1989,9 @@ class Viewport(QOpenGLWidget):
                 continue
             mesh = obj.mesh
             pose = obj.transform
+            wm = self.scene.drag_display.get(obj.id)
+            if wm is not None:
+                pose = wm @ (pose if pose is not _IDENTITY else _IDENTITY)
             if pose is _IDENTITY:
                 centre = cache.get(mesh.uid)
                 if centre is None:
@@ -1988,7 +2009,7 @@ class Viewport(QOpenGLWidget):
                     continue
                 centre = (np.asarray(b[0], float)
                           + np.asarray(b[1], float)) / 2
-                centre = world_points(centre.reshape(1, 3), obj)[0]
+                centre = world_points(centre.reshape(1, 3), obj, pose)[0]
             centres[i] = centre
             valid[i] = True
         return centres, valid
@@ -2332,7 +2353,13 @@ class Viewport(QOpenGLWidget):
         for prog in (self._mesh_prog, self._line_prog, self._thick_prog,
                      self._point_prog):
             self._set_clip_uniforms(prog, clips)
-        translucent = mode == "ghosted" or any(
+        drag = self.scene.drag_display
+        # Objects mid-move/rotate/scale (a command preview, a gumball
+        # drag) ride in drag_display: their geometry is not committed
+        # yet, so they are drawn ghosted — the same translucency the
+        # "ghosted" display mode gives every object.
+        ghosting = drag is not None and len(drag) > 0
+        translucent = mode == "ghosted" or ghosting or any(
             (o.material or {}).get("opacity", 1.0) < 1.0 for o in objects)
         if translucent:
             # translucency composits correctly back-to-front
@@ -2363,6 +2390,7 @@ class Viewport(QOpenGLWidget):
                        1 if mode == "rendered" else 0)
         for obj in objects:
             gpu = self._gpu.get(obj.id)
+            ghosted_obj = ghosting and obj.id in drag
             if gpu is None:
                 entry = self._tess_pending.get(obj.id)
                 pend = entry[1] if entry is not None else None
@@ -2375,6 +2403,9 @@ class Viewport(QOpenGLWidget):
                     GL.glDrawArrays(GL.GL_LINES, 0, len(pend))
                 continue
             pose = obj.transform
+            wm = drag.get(obj.id)
+            if wm is not None:
+                pose = wm @ (pose if pose is not _IDENTITY else _IDENTITY)
             if pose is _IDENTITY:
                 omvp = flat if gpu.anchor is None \
                     else anchored(mvp, gpu.anchor)
@@ -2405,7 +2436,7 @@ class Viewport(QOpenGLWidget):
                              self._thick_prog, self._point_prog):
                     self._set_clip_uniforms(prog, oclips)
                 clips_dirty = gpu.anchor is not None
-            selected = self._looks_selected(obj.id)
+            selected = self._looks_selected(obj.id) or ghosted_obj
             color = theme.SELECTION_COLOR if selected else self.scene.color_of(obj)
             if obj.locked and not selected:
                 grey = (color[0] + color[1] + color[2]) / 3 * 0.55 + 0.18
@@ -2437,6 +2468,8 @@ class Viewport(QOpenGLWidget):
                 fill_alpha_obj = 1.0
             elif obj.clip_plane is not None:
                 fill_alpha_obj = 0.18
+            elif ghosted_obj:
+                fill_alpha_obj = 0.35
             else:
                 fill_alpha_obj = fill_alpha
             if fill_alpha_obj > 0 and gpu.tri_count:
@@ -2467,7 +2500,7 @@ class Viewport(QOpenGLWidget):
                         self._uloc(self._mesh_prog, "uAlpha"),
                         fill_alpha * opacity)
                 if mode == "ghosted" or opacity < 1.0 \
-                        or obj.clip_plane is not None:
+                        or obj.clip_plane is not None or ghosted_obj:
                     GL.glDepthMask(False)
                 GL.glEnable(GL.GL_POLYGON_OFFSET_FILL)
                 GL.glPolygonOffset(1.0, 1.0)
@@ -2673,10 +2706,15 @@ class Viewport(QOpenGLWidget):
             gpu = self._gpu.get(obj.id)
             if gpu is None or not gpu.tri_count:
                 continue
+            wm = self.scene.drag_display.get(obj.id)
             b = obj.bbox() if obj.mesh_ready else None
+            if wm is not None:
+                b = _pose_box(b, wm)
             if b is None or b[0][2] < -1e-6:
                 continue                    # below the plane: no stamp
             pose = obj.transform
+            if wm is not None:
+                pose = wm @ (pose if pose is not _IDENTITY else _IDENTITY)
             sm = np.asarray(base @ pose, np.float32) \
                 if pose is not _IDENTITY else smvp
             self._set_mvp(self._line_prog,
@@ -3159,7 +3197,6 @@ class Viewport(QOpenGLWidget):
             self.layout_view.set_ghost_detail(None)
             self.layout_view._ghost_note = shape
             self._ghost = None
-            self._ghost_pose = None
             self.update()
             return
         if isinstance(shape, DetailView):
@@ -3170,7 +3207,6 @@ class Viewport(QOpenGLWidget):
         self.layout_view.set_ghost_detail(None)
         if isinstance(shape, PictureShape):
             self._ghost = None
-            self._ghost_pose = None
             plane = dict(shape.plane)
             plane["alpha"] = float(shape.plane.get("alpha", 1.0)) * 0.55
             ghost = PictureShape(plane)
@@ -3184,40 +3220,18 @@ class Viewport(QOpenGLWidget):
         if shape is None:
             if self._ghost is not None or had_picture or had_note:
                 self._ghost = None
-                self._ghost_base = None
-                self._ghost_pose = None
                 self.update()
             return
         try:
-            from ..core.tessellate import tessellate
-            if hasattr(shape, "base") and hasattr(shape, "pose"):
-                # A move or rotate ghost is the same geometry under a
-                # new 4x4: the tessellated cache is drawn as-is and
-                # the matrix goes into the draw matrix, the way a posed
-                # object's location does — a tick shifts a 4x4, not the
-                # vertices, and the compound is tessellated only when
-                # its base changes.
-                self._ghost_pose = shape.pose
-                cached = getattr(self, "_ghost_base", None)
-                if cached is not None and cached[0] is shape.base:
-                    self._ghost = cached[1]
-                else:
-                    ready = getattr(shape, "ready", None)
-                    base = ready.get("mesh") if ready is not None else None
-                    if base is None:
-                        # the worker is still meshing the base: draw no
-                        # ghost this tick rather than meshing it here
-                        self._ghost = None
-                    else:
-                        self._ghost_base = (shape.base, base)
-                        self._ghost = base
+            from ..core.tessellate import DisplayMesh, tessellate
+            if isinstance(shape, DisplayMesh):
+                # a ghost that is already tessellated (a copy preview
+                # built from the originals' own mesh) draws as-is
+                self._ghost = shape
             else:
-                self._ghost_base = None
-                self._ghost_pose = None
                 self._ghost = tessellate(shape)
         except Exception:                                  # noqa: BLE001
             self._ghost = None
-            self._ghost_pose = None
         self.update()
 
     def _clip_frames(self):
@@ -3272,17 +3286,8 @@ class Viewport(QOpenGLWidget):
         segs = (dm.edge_segments.reshape(-1, 3)
                 if len(dm.edge_segments) else None)
         if self.space != "model" and self._drawing_through() is not None:
-            # A sheet has no matrix to carry a ghost's pose, so here
-            # it is applied to the geometry before the model-to-sheet
-            # mapping; in model space the same pose rides the draw
-            # matrix.
-            pose = self._ghost_pose
-            if pose is not None:
-                m = np.asarray(pose, float)
-                tris = (None if tris is None
-                        else tris @ m[:3, :3].T + m[:3, 3])
-                segs = (None if segs is None
-                        else segs @ m[:3, :3].T + m[:3, 3])
+            # A sheet draws flat paper geometry: map the ghost onto the
+            # paper here, where in model space it is drawn as-is.
             tris = None if tris is None else self._on_paper(tris)
             segs = None if segs is None else self._on_paper(segs)
         return tris, segs
@@ -3290,12 +3295,6 @@ class Viewport(QOpenGLWidget):
     def _draw_ghost(self, mvp):
         if self._preview is None:
             return
-        pose = self._ghost_pose
-        if pose is not None and self.space == "model":
-            # The mesh is the base, un-moved: the pose carries it to
-            # the preview position, folded in the way a posed object's
-            # location is — between the mesh and the camera.
-            mvp = mvp @ np.asarray(pose, np.float32)
         tris, segs = self._ghost_geometry()
         points = self._ghost.points if self._ghost is not None else []
         if (len(points) and self.space != "model"
@@ -4146,9 +4145,14 @@ class Viewport(QOpenGLWidget):
         selectable = [obj for obj in self.scene.visible_objects()
                       if self.scene.is_selectable(obj.id)
                       and self.selection.filter_allows(obj.kind)]
+        drag = self.scene.drag_display
         for obj in self._pick_candidates(selectable, px - r, py - r,
                                          px + r, py + r, w, h):
             mesh = obj.mesh
+            wm = drag.get(obj.id)
+            pose = obj.transform
+            if wm is not None:
+                pose = wm @ (pose if pose is not _IDENTITY else _IDENTITY)
             depth = np.inf
             hit = False
             if mesh.is_cloud:
@@ -4156,9 +4160,9 @@ class Viewport(QOpenGLWidget):
                 # sample of the cloud: a box test would select a room-sized
                 # scan from anywhere inside it, which is everywhere.
                 cmesh = mesh
-                if obj.transform is not _IDENTITY:
+                if pose is not _IDENTITY:
                     cmesh = types.SimpleNamespace(
-                        vertices=world_points(mesh.vertices, obj))
+                        vertices=world_points(mesh.vertices, obj, pose))
                 pt_depth = self._nearest_cloud_point(cmesh, eye, px, py,
                                                     w, h)
                 if pt_depth is not None:
@@ -4170,7 +4174,7 @@ class Viewport(QOpenGLWidget):
             if shaded_faces:
                 tris, _ = self._near_triangles(mesh, px - r, py - r,
                                                px + r, py + r, w, h)
-                verts = world_points(mesh.vertices, obj)
+                verts = world_points(mesh.vertices, obj, pose)
                 t = ray_triangle_hits(origin, direction,
                                       verts[tris[:, 0]].astype(float),
                                       verts[tris[:, 1]].astype(float),

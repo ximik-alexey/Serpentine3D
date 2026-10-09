@@ -1062,9 +1062,15 @@ def test_scale_by_reference_points(env):
     proc.provide_text("0,0,0")           # base
     proc.provide_text("4,0,0")           # reference where it is now
     ghost = proc.preview_for((8.0, 0.0, 0.0))   # dragging: factor 2
-    assert g.volume(ghost) == pytest.approx(64)
+    assert ghost is None                      # a pose, not a rebuilt shape
+    import numpy as np
+    m = scene.drag_display[box.id]
+    assert np.allclose(np.diag(m[:3, :3]), [2, 2, 2])
+    assert np.allclose(m @ np.array([0, 0, 0, 1.0]), [0, 0, 0, 1.0], atol=1e-9)
     ghost = proc.preview_for(3.0)               # typed factor previews too
-    assert g.volume(ghost) == pytest.approx(8 * 27)
+    assert ghost is None
+    m = scene.drag_display[box.id]
+    assert np.allclose(np.diag(m[:3, :3]), [3, 3, 3])
     proc.provide_text("8,0,0")           # commit at factor 2
     assert not proc.busy
     assert g.volume(scene.all()[0].shape) == pytest.approx(64)
@@ -1079,7 +1085,11 @@ def test_rotate_by_reference_direction(env):
     proc.provide_text("0,0,0")           # center
     proc.provide_text("1,0,0")           # reference direction +X
     ghost = proc.preview_for((0.0, 1.0, 0.0))   # dragged to +Y
-    assert g.bbox(ghost.shape)[1][1] == pytest.approx(2, abs=1e-6)
+    assert ghost is None                      # a pose, not a rebuilt shape
+    import numpy as np
+    m = scene.drag_display[box.id]
+    v = m @ np.array([2.0, 0.0, 0.0, 1.0])
+    assert np.allclose(v[:3], [0.0, 2.0, 0.0], atol=1e-6)
     proc.provide_text("0,1,0")           # commit 90 degrees
     assert not proc.busy
     assert g.bbox(scene.all()[0].shape)[1][1] == pytest.approx(2, abs=1e-6)
@@ -1093,7 +1103,9 @@ def test_move_and_mirror_previews(env):
     proc.finish_selection()
     proc.provide_text("0,0,0")
     ghost = proc.preview_for((10.0, 0.0, 0.0))
-    assert g.bbox(ghost.shape)[0][0] == pytest.approx(10)
+    assert ghost is None                      # a pose, not a rebuilt shape
+    import numpy as np
+    assert np.allclose(scene.drag_display[box.id][:3, 3], [10, 0, 0])
     proc.provide_text("10,0,0")
     assert not proc.busy
 

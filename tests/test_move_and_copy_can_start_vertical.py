@@ -159,14 +159,24 @@ def test_configured_presets_offer_the_next_prompt_and_keep_the_vertical_result(
 
     _type(window, "-3cm")
 
-    mesh = tessellate(g.translate(original, tuple(-30 * normal)))
-    for pane in window.all_viewports():
-        assert pane._ghost is not None, "A preset must preview its signed height in every pane"
-        triangles, segments = pane._ghost_geometry()
-        np.testing.assert_allclose(segments, mesh.edge_segments.reshape(-1, 3),
-                                   rtol=0, atol=1e-5)
-        np.testing.assert_allclose(triangles, mesh.vertices[mesh.triangles.ravel()],
-                                   rtol=0, atol=1e-5)
+    if command == "move":
+        # a move previews in place: the scene's drag_display carries the
+        # pose and every pane composes it, no ghost is built
+        assert obj.id in window.scene.drag_display, \
+            "A preset must preview its signed height in every pane"
+        np.testing.assert_allclose(
+            window.scene.drag_display[obj.id][:3, 3], -30 * normal,
+            rtol=0, atol=1e-5)
+    else:
+        mesh = tessellate(g.translate(original, tuple(-30 * normal)))
+        for pane in window.all_viewports():
+            assert pane._ghost is not None, \
+                "A preset must preview its signed height in every pane"
+            triangles, segments = pane._ghost_geometry()
+            np.testing.assert_allclose(segments, mesh.edge_segments.reshape(-1, 3),
+                                       rtol=0, atol=1e-5)
+            np.testing.assert_allclose(triangles, mesh.vertices[mesh.triangles.ravel()],
+                                       rtol=0, atol=1e-5)
     assert _state(window.scene, window.selection, window.history) == before
     QTest.keyClick(window.command_line.input, Qt.Key.Key_Return)
     if command == "move":

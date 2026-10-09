@@ -27,132 +27,6 @@ def _ghost(objs, fn):
                             for s in shapes])
 
 
-class _MovedGhost:
-    """A translated compound that remembers its un-moved base.
-
-    A move previews the same geometry under a new offset, and tessellating
-    the whole compound per tick is the drag killer; a pane that receives
-    this can shift a tessellated cache by the offset instead. `ready` is
-    the box the background thread fills with the tessellated base, so the
-    first tick of the drag does not pay for it.
-    """
-    def __init__(self, base, offset, shape, ready=None):
-        self.base = base
-        self.offset = offset
-        self._shape = shape
-        self.ready = ready
-
-    @property
-    def pose(self):
-        # The 4x4 the panes ride in the draw matrix instead of the
-        # offset: a translation is the common case, and a rotation
-        # ghost carries its turn the same way.
-        return translation_matrix(self.offset)
-
-    @property
-    def shape(self):
-        # Built on first read, not per tick: the panes shift a
-        # tessellated cache by the offset, and the translated B-rep
-        # is only needed where a shape is actually asked for.
-        if self._shape is None:
-            from ..core import geometry as g
-            self._shape = g.translate(self.base, self.offset)
-        return self._shape
-
-
-class _RotatedGhost:
-    """The same compound turned about (center, axis) by a new angle.
-
-    A rotate preview is the same geometry under a new orientation, and
-    rotating every B-rep per tick is the drag killer: a pane that
-    receives this shifts a tessellated cache by the rotation matrix
-    instead. `shape` is the rotated B-rep, built lazily for the few
-    places that actually ask for it.
-    """
-    def __init__(self, base, center, axis, angle, ready=None):
-        self.base = base
-        self.center = center
-        self.axis = axis
-        self.angle = angle
-        self._shape = None
-        self.ready = ready
-
-    @property
-    def pose(self):
-        return rotation_matrix(self.center, self.axis, self.angle)
-
-    @property
-    def shape(self):
-        if self._shape is None:
-            from ..core import geometry as g
-            self._shape = g.rotate(
-                self.base, self.center, self.axis, self.angle)
-        return self._shape
-
-def _ghost_mesh(base, parts):
-    """A coarse, wireframe-only mesh of a ghost's base, for a pending move.
-
-    The full tessellator spends its time on the normals, the curvature
-    and the sub-object maps a ghost never draws; this one meshes once,
-    coarsely (5 degrees), and collects only the positions, the triangle
-    indices and the CAD edge polylines, so a whole-compound ghost costs
-    a few seconds, not forty.
-    """
-    import numpy as np
-    from ..core import occ
-    from ..core.geometry import copy_shape
-    from ..core.tessellate import (DisplayMesh, _deflection_for,
-                                  _edge_polyline)
-    from OCP.TopAbs import TopAbs_FACE, TopAbs_Orientation
-    from OCP.TopExp import TopExp_Explorer
-    from OCP.TopLoc import TopLoc_Location
-    from OCP.BRepMesh import BRepMesh_IncrementalMesh
-
-    shape = copy_shape(base)
-    deflection = _deflection_for(parts[0])
-    BRepMesh_IncrementalMesh(shape, deflection,
-                             False, 5.0, True)
-    verts, tris = [], []
-    offset = 0
-    exp = TopExp_Explorer(shape, TopAbs_FACE)
-    while exp.More():
-        face = occ.to_face(exp.Current())
-        loc = TopLoc_Location()
-        tri = occ.triangulation(face, loc)
-        if tri is not None:
-            trsf = loc.Transformation()
-            n = tri.NbNodes()
-            v = np.empty((n, 3), np.float64)
-            for i in range(1, n + 1):
-                p = tri.Node(i).Transformed(trsf)
-                v[i - 1] = (p.X(), p.Y(), p.Z())
-            m = tri.NbTriangles()
-            idx = np.empty((m, 3), np.uint32)
-            for i in range(1, m + 1):
-                t = tri.Triangle(i)
-                idx[i - 1] = (t.Value(1) - 1 + offset,
-                             t.Value(2) - 1 + offset,
-                             t.Value(3) - 1 + offset)
-            if face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED:
-                idx = idx[:, ::-1].copy()
-            offset += n
-            verts.append(v)
-            tris.append(idx)
-        exp.Next()
-    if not verts:
-        return None
-    mesh = DisplayMesh(vertices=np.concatenate(verts).astype(np.float32),
-                       triangles=np.concatenate(tris))
-    segs = []
-    for edge in g.edges_of(shape):
-        pts = _edge_polyline(edge, deflection)
-        if pts is not None and len(pts) >= 2:
-            segs.append(np.stack([pts[:-1], pts[1:]], axis=1))
-    if segs:
-        mesh.edge_segments = np.concatenate(segs).astype(np.float32)
-    return mesh
-
-
 def _sheet_ghost(ctx, picks, matrix, size: float = 1.0):
     """What `picks` on a sheet would look like put through `matrix`, as one
     shape to ghost: paper geometry as its shape, everything else as the
@@ -241,6 +115,100 @@ def _point_map(fn):
     """`fn`, written for shapes, as the map it makes of bare positions."""
     return lambda p: g.transform_points([tuple(p)], fn)[0]
 
+
+# -- whole-object operations, as 4x4 poses ---------------------------------
+#
+# The same operations `fn` performs on a shape, written as matrices: for a
+# whole object the operation rides on the object instead of being written
+# into the B-rep — a move of a hundred objects costs a hundred matrices,
+# not a hundred re-transforms. The builders mirror the geometry functions
+# they replace, point for point.
+
+def _preview_pose(ctx, held, objs, matrix, fn, action=None):
+    """Preview a whole-object operation as a pose in place, not a rebuilt
+    shape.
+
+    The matrix rides on the scene's drag_display and the viewport composes
+    it on top of each object's pose — exactly the pose the commit will
+    write — so the eye sees the result on the first tick, with no kernel
+    work at all. Held parts still preview through `fn`.
+    """
+    if not held:
+        ctx.scene.set_drag_display({o.id: matrix for o in objs})
+        return None
+    return _preview_of(ctx, held, objs, fn, action=action)
+
+
+# (id of the object's shape) -> (object id, DisplayMesh). The ghost
+# tessellates a copy of the shape: BRepMesh stores its mesh inside the
+# shape it is handed, so tessellating the object's own B-rep in place
+# would rewrite its bytes. The copy costs one tessellation the first
+# time an object is previewed; afterwards the entry is pure memory.
+# Replaced shapes get new ids, which drops the entry.
+_GHOST_TESS: dict = {}
+
+
+def _ghost_display(pairs, cap=1_000_000):
+    """Ghost of copies that do not exist yet, built from the originals' own
+    tessellations moved by numpy alone — no kernel, so a ring or grid of
+    meshed objects costs a matrix multiply per vertex, not a B-rep transform
+    per copy. `pairs` is (object, the copy's full world matrix).
+
+    Above `cap` total vertices the ghost is dropped rather than freezing the
+    frame: the copies are still created on the click, only the preview goes
+    away.
+    """
+    import numpy as np
+
+    from ..core.tessellate import DisplayMesh, tessellate
+    usable, total = [], 0
+    for o, m in pairs:
+        key = id(o.shape)
+        hit = _GHOST_TESS.get(key)
+        dm = hit[1] if hit is not None and hit[0] == o.id else None
+        if dm is None:
+            dm = tessellate(g.copy_shape(o.shape))
+            _GHOST_TESS[key] = (o.id, dm)
+        if not len(dm.vertices):
+            continue
+        total += len(dm.vertices)
+        if total > cap:
+            return None
+        usable.append((o, m, dm))
+    if not usable:
+        return None
+    verts, tris, segs = [], [], []
+    off = 0
+    for o, m, dm in usable:
+        full = m
+        A = np.asarray(full[:3, :3], float)
+        t = np.asarray(full[:3, 3], float)
+        nv = len(dm.vertices)
+        verts.append(dm.vertices @ A.T + t)
+        if len(dm.triangles):
+            tris.append(dm.triangles + off)
+        if len(dm.edge_segments):
+            segs.append(dm.edge_segments @ A.T + t)
+        off += nv
+    kw = {"vertices": np.concatenate(verts, axis=0)}
+    if tris:
+        kw["triangles"] = np.concatenate(tris, axis=0).astype(np.uint32)
+    if segs:
+        kw["edge_segments"] = np.concatenate(segs, axis=0)
+    return DisplayMesh(**kw)
+
+
+
+def _matrix_scale_about(center, factor, factors=None):
+    """Scale about `center`, uniform by `factor` or per-axis by `factors`."""
+    import numpy as np
+    f = np.asarray(factors if factors is not None
+                   else (factor, factor, factor), float)
+    c = np.asarray(center, float)
+    m = np.eye(4)
+    m[:3, :3] = np.diag(f)
+    m[:3, 3] = c - f * c
+    return m
 
 def _do(ctx, held, objs, fn, verb, tail="", action=None, matrix=None):
     """Apply `fn` to what is held, or to the objects, and say what happened.
@@ -435,21 +403,6 @@ def cmd_move(ctx):
     # Keep the plane of the base point even if the target is picked in a
     # different pane, or Vertical is enabled after the base was chosen.
     normal = tuple(float(c) for c in ctx.cplane.normal)
-    # The ghost's base compound is tessellated once, off the main thread,
-    # while the user picks the second point: the first tick of the drag
-    # must not pay for it. The scene's own tess workers are paused during
-    # the interaction, so this thread is the only one meshing.
-    ghost_ready = {}
-    def _prepare_ghost():
-        try:
-            ghost_ready["mesh"] = _ghost_mesh(_base,
-                                             [o.shape for o in objs])
-        except Exception as exc:                          # noqa: BLE001
-            ghost_ready["failed"] = str(exc)
-    _base = _ghost(objs, lambda s: s)
-    if _base is not None:
-        import threading
-        threading.Thread(target=_prepare_ghost, daemon=True).start()
 
     def _offset(p):
         off = tuple(b - a for a, b in zip(p1, p))
@@ -460,22 +413,10 @@ def cmd_move(ctx):
 
     def _preview(p):
         offset = _offset(p)
-        if any(v for k, v in held.items() if k in
-               ("cv", "segment", "face", "edge")):
-            # partial sub-object moves keep the generic path
-            return _preview_of(ctx, held, objs,
-                               lambda s: g.translate(s, offset),
-                               action=("move", offset))
-        # The ghost of a plain move is the same compound under a new
-        # offset: translate the compound per tick instead of translating
-        # every shape; the pane shifts the tessellated cache the worker
-        # is building, so no tick pays for the compound.
-        if _base is None:
-            return _preview_of(ctx, held, objs,
-                               lambda s: g.translate(s, offset),
-                               action=("move", offset))
-        return _MovedGhost(_base, offset, None,
-                           ready=ghost_ready)
+        return _preview_pose(ctx, held, objs,
+                             translation_matrix(offset),
+                             lambda s: g.translate(s, offset),
+                             action=("move", offset))
 
     def _constraints():
         axis = (p1, normal) if ctx.opt("Vertical", "No") == "Yes" else None
@@ -536,7 +477,8 @@ def cmd_copy(ctx):
         return off
 
     def _preview(p):
-        return _ghost(objs, lambda s: g.translate(s, _offset(p)))
+        return _ghost_display(
+            [(o, translation_matrix(_offset(p))) for o in objs])
 
     def _constraints():
         axis = (p1, normal) if ctx.opt("Vertical", "No") == "Yes" else None
@@ -582,21 +524,6 @@ def cmd_rotate(ctx):
         held, objs = yield from _what_to_transform(ctx, "Select objects to rotate")
     center = yield PointReq("Center of rotation")
     axis = (0.0, 0.0, 1.0) if lv is not None else tuple(ctx.cplane.normal)
-    # The ghost's base compound is tessellated once, off the main
-    # thread, while the user picks the reference point: the first tick
-    # of the drag must not pay for it, and a tick must not rotate
-    # every B-rep of the drawing.
-    ghost_ready = {}
-    def _prepare_ghost():
-        try:
-            ghost_ready["mesh"] = _ghost_mesh(_base,
-                                             [o.shape for o in objs])
-        except Exception as exc:                          # noqa: BLE001
-            ghost_ready["failed"] = str(exc)
-    _base = _ghost(objs, lambda s: s)
-    if _base is not None:
-        import threading
-        threading.Thread(target=_prepare_ghost, daemon=True).start()
     ref = yield PointReq("Angle in degrees, or first reference point",
                          rubber_from=center, allow_number=True)
     if isinstance(ref, float):
@@ -615,20 +542,15 @@ def cmd_rotate(ctx):
 
         def _preview(p):
             a = p if isinstance(p, float) else _angle(p)
-            if (any(v for k, v in held.items() if k in
-                    ("cv", "segment", "face", "edge"))
-                    or _base is None):
-                # partial sub-object turns, and a paper rotate, keep
-                # the generic path
+            if lv is not None:
+                # a paper rotate keeps the generic path
                 return _preview_of(ctx, held, objs,
                                    lambda s: g.rotate(s, center, axis, a),
                                    action=("rotate", center, axis, a))
-            # The ghost of a plain turn is the same compound under a
-            # new orientation: the pane shifts the tessellated cache
-            # the worker is building by the rotation matrix, so no tick
-            # rotates a B-rep.
-            return _RotatedGhost(_base, center, axis, a,
-                                 ready=ghost_ready)
+            return _preview_pose(ctx, held, objs,
+                                 rotation_matrix(center, axis, a),
+                                 lambda s: g.rotate(s, center, axis, a),
+                                 action=("rotate", center, axis, a))
 
         p2 = yield PointReq("Angle, or second reference point",
                             rubber_from=center, allow_number=True,
@@ -759,9 +681,10 @@ def cmd_scale(ctx):
             f = _factor(p)
             if f < 1e-9:
                 return None
-            return _preview_of(ctx, held, objs,
-                               lambda s: g.scale(s, center, f),
-                               action=("scale", f))
+            return _preview_pose(ctx, held, objs,
+                                 scale_matrix(center, f),
+                                 lambda s: g.scale(s, center, f),
+                                 action=("scale", f))
 
         p2 = yield PointReq("Second reference point (drag to scale)",
                             rubber_from=center, allow_number=True,
@@ -790,7 +713,9 @@ def cmd_scale_nu(ctx):
     def _preview(factors):
         if not all(abs(f) > 1e-9 for f in factors):
             return None
-        return _preview_of(ctx, held, objs, lambda s: _apply(s, factors))
+        return _preview_pose(ctx, held, objs,
+                             _matrix_scale_about(center, 1.0, factors),
+                             lambda s: _apply(s, factors))
 
     ref = yield PointReq("X factor, or first reference point",
                          rubber_from=center, allow_number=True,

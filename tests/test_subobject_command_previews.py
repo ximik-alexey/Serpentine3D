@@ -316,16 +316,26 @@ def test_existing_whole_object_and_control_point_previews_still_match_commit(env
     if held == "whole-object":
         obj = _box(scene)
         sel.set([obj.id])
-        expected = [(x, y, z + 5.) for x, y, z in _BOX_POINTS]
-    else:
-        obj = scene.add(g.make_line((0, 0, 0), (10, 0, 0)))
-        sel.toggle_subobject(obj.id, "cv", 0)
-        expected = [(0., 0., 5.), (10., 0., 0.)]
+        _start(proc, "move", (0., 0., 0.))
+        # a whole-object move previews as a pose in place, not a
+        # rebuilt shape: the ghost is gone, the matrix is in
+        # drag_display, and the commit writes that same matrix.
+        ghost = proc.preview_for((0., 0., 5.))
+        assert ghost is None
+        import numpy as np
+        assert np.allclose(scene.drag_display[obj.id][:3, 3],
+                            [0., 0., 5.])
+        proc.provide((0., 0., 5.))
+        moved = scene.get(obj.id).shape
+        _assert_points(moved, [(x, y, z + 5.) for x, y, z in _BOX_POINTS])
+        return
+    obj = scene.add(g.make_line((0, 0, 0), (10, 0, 0)))
+    sel.toggle_subobject(obj.id, "cv", 0)
     _start(proc, "move", (0., 0., 0.))
 
     ghost = _preview(proc, (0., 0., 5.))
 
-    _assert_points(ghost, expected)
+    _assert_points(ghost, [(0., 0., 5.), (10., 0., 0.)])
     proc.provide((0., 0., 5.))
     _assert_same_geometry(ghost, scene.get(obj.id).shape)
 
