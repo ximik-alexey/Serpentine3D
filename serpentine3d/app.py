@@ -1549,8 +1549,8 @@ class MainWindow(QMainWindow):
                     vp.set_ghost(ghost)
         dt = time.perf_counter() - t0
         if dt > 0.03:
-            print(f"serp3d-perf: mouse-event {dt*1000:.0f} ms",
-                  file=sys.stderr)
+            with open("/tmp/serp3d-perf.log", "a") as f:
+                f.write(f"mouse-event {dt*1000:.0f} ms\n")
 
     def _refresh_rubber(self, cursor, source=None):
         """`source` is the pane the cursor is in, and gets the number."""

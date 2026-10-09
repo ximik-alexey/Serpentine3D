@@ -1317,8 +1317,8 @@ class Viewport(QOpenGLWidget):
                   "builds a new context and tries again.", file=sys.stderr)
         dt = time.perf_counter() - t0
         if dt > 0.05:
-            print(f"serp3d-perf: {self.space} frame {dt*1000:.0f} ms",
-                  file=sys.stderr)
+            with open("/tmp/serp3d-perf.log", "a") as f:
+                f.write(f"frame {self.space} {dt*1000:.0f} ms\n")
 
     def _paint_frame(self):
         # Every way of moving the camera ends up here, so this is where the
@@ -2102,8 +2102,8 @@ class Viewport(QOpenGLWidget):
                                   if uid in live_meshes}
         dt = time.perf_counter() - t0
         if dt > 0.03:
-            print(f"serp3d-perf: _sync_gpu {dt*1000:.0f} ms",
-                  file=sys.stderr)
+            with open("/tmp/serp3d-perf.log", "a") as f:
+                f.write(f"sync_gpu {dt*1000:.0f} ms\n")
 
     def _worker_pool(self):
         if self._tess_pool is None:
