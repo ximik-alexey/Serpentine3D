@@ -4587,7 +4587,20 @@ class Viewport(QOpenGLWidget):
                 win = self.window()
                 if isinstance(win, QMainWindow):
                     win.statusBar().showMessage(label)
-            self.update()
+            # The drag math runs on every move, but the pane repaints at a
+            # capped rate, the way the command previews do (app
+            # _on_mouse_world): a 125Hz mouse must not paint faster than
+            # the scene can draw, or a drag on a big assembly freezes.
+            # The release paints the final state, so a skipped frame is
+            # never a lost one.
+            from PySide6.QtCore import QElapsedTimer
+            timer = getattr(self, "_gumball_paint_timer", None)
+            due = timer is None or timer.elapsed() >= 33
+            if timer is None:
+                timer = self._gumball_paint_timer = QElapsedTimer()
+            if due:
+                timer.restart()
+                self.update()
             return True
         if not ev.buttons() and not self.point_mode:
             if gb.update_hover(pos.x(), pos.y()):
