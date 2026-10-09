@@ -292,6 +292,11 @@ class SnapIndex:
         self._cache: dict[str, tuple[int, list]] = {}
         self._int_cache: tuple[int, list] | None = None
         self._cloud_cache = {}
+        # Set by find() for the duration of a pass: True while the
+        # scene is in a catch-up tessellation (many 3D meshes still
+        # being built off-thread), so _points skips them instead of
+        # meshing them on the picking thread.
+        self._tess_catchup = False
         self.enabled = True
         self.types = {t: t in ("end", "point", "mid", "center", "quad", "int")
                       for t in SNAP_TYPES}
@@ -306,6 +311,16 @@ class SnapIndex:
 
     def _points(self, obj) -> list:
         entry = self._cache.get(obj.id)
+        # A scene in the middle of a catch-up tessellation (a big
+        # file whose meshes are still being built off-thread) is not
+        # the place to mesh a shape on the picking thread: the first
+        # find on such a file is the whole scene, and forcing every
+        # unready mesh here is tens of seconds. The object joins the
+        # candidates when the mesh lands. A scene that is not in
+        # catch-up keeps the on-demand behaviour, which is what small
+        # and test scenes have to rely on.
+        if entry is None and not obj.mesh_ready and self._tess_catchup:
+            return []
         mesh_key = obj.mesh.uid
         if entry is None or entry[0] != mesh_key:
             entry = (mesh_key, _static_snap_points(obj.shape))
@@ -408,6 +423,16 @@ class SnapIndex:
             return None
         objects = self.scene.visible_objects()
         visible_ids = {obj.id for obj in objects}
+        # A few unready meshes is a scene that has not had time to
+        # mesh a few shapes; a lot of them is a catch-up after a big
+        # load, where meshing them here on the picking thread is the
+        # tens-of-seconds stall. Count only the 3D shapes: paper items
+        # are 2D curves and points that no worker ever meshes, and they
+        # must keep snapping on demand.
+        unready = sum(1 for obj in objects
+                     if not obj.mesh_ready
+                     and geometry.shape_kind(obj.shape) in ("solid", "surface"))
+        self._tess_catchup = unready >= 32
         self._cloud_cache = {key: value for key, value in self._cloud_cache.items()
                              if key in visible_ids}
         pts, kinds = [], []
