@@ -39,8 +39,18 @@ class _MovedGhost:
     def __init__(self, base, offset, shape, ready=None):
         self.base = base
         self.offset = offset
-        self.shape = shape
+        self._shape = shape
         self.ready = ready
+
+    @property
+    def shape(self):
+        # Built on first read, not per tick: the panes shift a
+        # tessellated cache by the offset, and the translated B-rep
+        # is only needed where a shape is actually asked for.
+        if self._shape is None:
+            from ..core import geometry as g
+            self._shape = g.translate(self.base, self.offset)
+        return self._shape
 
 def _sheet_ghost(ctx, picks, matrix, size: float = 1.0):
     """What `picks` on a sheet would look like put through `matrix`, as one
@@ -363,7 +373,7 @@ def cmd_move(ctx):
             return _preview_of(ctx, held, objs,
                                lambda s: g.translate(s, offset),
                                action=("move", offset))
-        return _MovedGhost(_base, offset, g.translate(_base, offset),
+        return _MovedGhost(_base, offset, None,
                            ready=ghost_ready)
 
     def _constraints():
