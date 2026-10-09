@@ -12,7 +12,6 @@ from serpentine3d.app import MainWindow
 from serpentine3d.commands.base import PointReq, SelectReq
 from serpentine3d.core import cplane as cp
 from serpentine3d.core import geometry as g
-from serpentine3d.core.tessellate import tessellate
 
 
 BASE = (4.0, 7.0, 3.0)
@@ -81,6 +80,14 @@ def _assert_translated(shape, original, offset):
         assert actual == pytest.approx(expected, abs=1e-6)
 
 
+def _assert_preview_translated(scene, obj, offset):
+    """A whole-object preview is the drag display, not a ghost shape."""
+    matrix = scene.drag_display.get(obj.id)
+    assert matrix is not None, "A Vertical move shows its result before committing"
+    assert (matrix[0][3], matrix[1][3], matrix[2][3]) == pytest.approx(
+        tuple(float(c) for c in np.asarray(offset).ravel()), abs=1e-6)
+
+
 @pytest.mark.parametrize("stage", ["selection", "base", "target"])
 @pytest.mark.parametrize("entry", ["v", "Vertical"])
 def test_vertical_is_an_option_at_each_move_prompt_without_answering_it(env, stage, entry):
@@ -129,11 +136,12 @@ def test_vertical_projects_targets_onto_the_base_planes_normal(env, plane, input
     offset = np.dot(np.subtract(TARGET, BASE), plane.normal) * plane.normal
     request = proc.request
     before = _state(scene, selection, history)
-    ghost = (proc.preview_for(TARGET) if input_mode == "mouse-point"
-             else proc.preview_shape("19,-6,11"))
+    if input_mode == "mouse-point":
+        proc.preview_for(TARGET)
+    else:
+        proc.preview_shape("19,-6,11")
 
-    assert ghost is not None, "A Vertical move shows its result before committing"
-    _assert_translated(ghost, original, offset)
+    _assert_preview_translated(scene, obj, offset)
     assert _state(scene, selection, history) == before
     assert proc.busy and proc.request is request
     if input_mode == "mouse-point":
@@ -142,7 +150,7 @@ def test_vertical_projects_targets_onto_the_base_planes_normal(env, plane, input
         proc.provide_text("19,-6,11")
     assert not proc.busy
     _assert_translated(scene.get(obj.id).shape, original, offset)
-    assert _geometry(scene.get(obj.id).shape) == _geometry(ghost)
+    assert _geometry(scene.get(obj.id).shape) == _geometry(g.translate(original, offset))
 
 
 @pytest.mark.parametrize("normal", [(0, 0, 1), (2, -3, 6)], ids=["top", "tilted"])
@@ -156,15 +164,15 @@ def test_vertical_accepts_signed_zero_and_unit_distances_without_a_cursor(env, n
     _vertical(proc)
     before = _state(scene, selection, history)
 
-    ghost = proc.preview_shape(text)
+    proc.preview_shape(text)
 
-    assert ghost is not None, "A typed height works even without a mouse direction"
-    _assert_translated(ghost, original, distance * plane.normal)
+    _assert_preview_translated(scene, obj, distance * plane.normal)
     assert _state(scene, selection, history) == before
     proc.provide_text(text)
     assert not proc.busy, "The height must finish Move instead of asking for coordinates"
     _assert_translated(scene.get(obj.id).shape, original, distance * plane.normal)
-    assert _geometry(scene.get(obj.id).shape) == _geometry(ghost)
+    assert _geometry(scene.get(obj.id).shape) == _geometry(
+        g.translate(original, distance * plane.normal))
 
 
 def test_vertical_turns_off_and_another_move_starts_unconstrained(env):
@@ -172,13 +180,14 @@ def test_vertical_turns_off_and_another_move_starts_unconstrained(env):
     obj = _start(scene, selection, proc)
     original = obj.shape
     _vertical(proc)
-    _assert_translated(proc.preview_for(TARGET), original, np.asarray((0, 0, 8)))
+    proc.preview_for(TARGET)
+    _assert_preview_translated(scene, obj, np.asarray((0, 0, 8)))
 
     _vertical(proc, "No")
 
     ordinary = np.subtract(TARGET, BASE)
-    ghost = proc.preview_for(TARGET)
-    _assert_translated(ghost, original, ordinary)
+    proc.preview_for(TARGET)
+    _assert_preview_translated(scene, obj, ordinary)
     proc.provide(TARGET)
     _assert_translated(scene.get(obj.id).shape, original, ordinary)
     selection.set([obj.id])
@@ -230,7 +239,8 @@ def test_vertical_keeps_the_base_normal_when_the_active_pane_changes(env):
 
     viewport.cplane = cp.PRESETS["right"]()
 
-    _assert_translated(proc.preview_for(TARGET), original, offset)
+    proc.preview_for(TARGET)
+    _assert_preview_translated(scene, obj, offset)
     proc.provide(TARGET)
     _assert_translated(scene.get(obj.id).shape, original, offset)
 
@@ -248,11 +258,12 @@ def test_multiple_selected_objects_move_vertically_together_and_undo_as_one(env)
     before = _state(scene, selection, history)
     request = proc.request
 
-    ghost = proc.preview_for(TARGET)
+    proc.preview_for(TARGET)
 
-    expected = g.make_compound([g.translate(originals[obj.id], (0, 0, 8))
-                                for obj in (box, curve)])
-    assert _geometry(ghost) == _geometry(expected), "The ghost contains only selected objects"
+    for o in (box, curve):
+        _assert_preview_translated(scene, o, (0, 0, 8))
+    assert untouched.id not in scene.drag_display, \
+        "The display contains only selected objects"
     assert _state(scene, selection, history) == before
     assert proc.request is request
     proc.provide(TARGET)
@@ -363,15 +374,13 @@ def _start_window(window):
     return obj
 
 
-def _assert_all_panes_show(window, expected):
-    mesh = tessellate(expected)
-    panes = list(window.all_viewports())
-    assert len(panes) == 4
-    for pane in panes:
-        assert pane._ghost is not None, f"{pane._view_name} must show the pending move"
-        triangles, segments = pane._ghost_geometry()
-        np.testing.assert_allclose(segments, mesh.edge_segments.reshape(-1, 3), rtol=0, atol=1e-5)
-        np.testing.assert_allclose(triangles, mesh.vertices[mesh.triangles.ravel()], rtol=0, atol=1e-5)
+def _assert_all_panes_show(window, obj, offset):
+    """The pending move is the scene drag display, which all four panes
+    draw over the object's own tessellation: one display, no per-pane
+    ghost."""
+    scene = window.scene
+    assert len(list(window.all_viewports())) == 4
+    _assert_preview_translated(scene, obj, offset)
 
 
 @pytest.mark.parametrize("finish", ["commit", "cancel"])
@@ -387,7 +396,7 @@ def test_v_enter_and_a_typed_height_preview_reach_all_panes_and_clear_at_finish(
     _type(window, "3cm")
 
     expected = g.translate(original, (0, 0, 30))
-    _assert_all_panes_show(window, expected)
+    _assert_all_panes_show(window, obj, (0, 0, 30))
     assert _state(window.scene, window.selection, window.history) == before
     if finish == "commit":
         QTest.keyClick(window.command_line.input, Qt.Key.Key_Return)
@@ -397,25 +406,25 @@ def test_v_enter_and_a_typed_height_preview_reach_all_panes_and_clear_at_finish(
         assert _geometry(window.scene.get(obj.id).shape) == _geometry(original)
         assert not window.history.can_undo
     assert not window.processor.busy
+    assert not window.scene.drag_display
     assert all(pane._ghost is None and pane.point_axis is None
                and not pane.point_mode for pane in window.all_viewports())
 
 
 def test_the_vertical_chip_updates_an_existing_typed_preview_in_every_pane(window):
     obj = _start_window(window)
-    original = obj.shape
     _type(window, "19,-6,11")
-    _assert_all_panes_show(window, g.translate(original, np.subtract(TARGET, BASE)))
+    _assert_all_panes_show(window, obj, np.subtract(TARGET, BASE))
     before = _state(window.scene, window.selection, window.history)
     request = window.processor.request
 
     window.command_line.optionClicked.emit("Vertical")
 
-    _assert_all_panes_show(window, g.translate(original, (0, 0, 8)))
+    _assert_all_panes_show(window, obj, (0, 0, 8))
     assert window.processor.request is request
     assert _state(window.scene, window.selection, window.history) == before
     window.command_line.optionClicked.emit("Vertical")
-    _assert_all_panes_show(window, g.translate(original, np.subtract(TARGET, BASE)))
+    _assert_all_panes_show(window, obj, np.subtract(TARGET, BASE))
 
 
 @pytest.mark.parametrize("view", ["perspective", "front"])
@@ -438,7 +447,7 @@ def test_the_mouse_can_move_along_the_vertical_from_another_pane(window, view):
                         Qt.KeyboardModifier.NoModifier)
     pane.mouseMoveEvent(event)
     expected = g.translate(original, (0, 0, upper[2] - BASE[2]))
-    _assert_all_panes_show(window, expected)
+    _assert_all_panes_show(window, obj, (0, 0, upper[2] - BASE[2]))
     assert _state(window.scene, window.selection, window.history) == before
 
     QTest.mouseClick(pane, Qt.MouseButton.LeftButton, pos=QPoint(400, 200))

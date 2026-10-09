@@ -91,6 +91,7 @@ class FakeMesh:
 
 class FakeObject:
     def __init__(self, mesh=None, transform=_IDENTITY):
+        self.id = "fake"
         self.mesh = mesh
         self.mesh_ready = mesh is not None
         self.transform = transform

@@ -2251,10 +2251,12 @@ class Viewport(QOpenGLWidget):
         # A cold sweep — the first one after a big load — is seconds of
         # BRepBndLib, and paying it on the frame is the freeze that
         # follows opening a file. Cold goes to a worker; the camera
-        # keeps its bounds until the sweep lands.
-        if (any(o._bounds is None for o in self.scene.visible_objects())
-                and not self._cam_bounds_inflight):
-            self._cam_bounds_inflight = True
+        # keeps its bounds until the sweep lands. A handful of cold
+        # objects is milliseconds, so a small scene sweeps on the frame
+        # and the camera never waits on a worker signal.
+        cold = [o for o in self.scene.visible_objects()
+                if o._bounds is None]
+        if len(cold) >= 16 and not self._cam_bounds_inflight:
 
             def work():
                 # The per-object form of Scene.bbox with a pause between

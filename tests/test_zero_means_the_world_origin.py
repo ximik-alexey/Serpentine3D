@@ -107,17 +107,18 @@ def test_moving_to_zero_previews_and_commits_the_same_world_origin():
     selection.set([obj.id])
     proc.run("move")
     proc.provide_text("5,6,7")
-    explicit = proc.preview_shape("0,0,0")
-    shorthand = proc.preview_shape("0")
+    proc.preview_shape("0,0,0")
+    explicit = scene.drag_display.get(obj.id)
+    proc.preview_shape("0")
+    shorthand = scene.drag_display.get(obj.id)
     assert explicit is not None
     assert shorthand is not None, "typing 0 should preview the move to world zero"
-    for actual, expected in zip(g.bbox(shorthand), g.bbox(explicit)):
-        assert actual == pytest.approx(expected, abs=1e-6)
-    assert g.bbox(shorthand)[0] == pytest.approx(ORIGIN, abs=1e-6)
+    assert tuple(map(tuple, shorthand)) == tuple(map(tuple, explicit))
+    assert (shorthand[0][3], shorthand[1][3], shorthand[2][3]) == pytest.approx(
+        tuple(-c for c in AWAY), abs=1e-9)
     proc.provide_text("0")
     assert not proc.busy, said
-    for actual, expected in zip(g.bbox(scene.get(obj.id).shape), g.bbox(shorthand)):
-        assert actual == pytest.approx(expected, abs=1e-6)
+    assert g.bbox(scene.get(obj.id).shape)[0] == pytest.approx(ORIGIN, abs=1e-6)
 
 
 @pytest.mark.parametrize("command,before_zero,after_zero,reason", [

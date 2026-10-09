@@ -34,7 +34,7 @@ def _geometry(shape):
 
 def _state(scene, selection, history):
     return (scene.revision,
-            tuple((obj.id, g.shape_to_bytes(obj.shape)) for obj in scene.all()),
+            tuple((obj.id, _geometry(obj.shape)) for obj in scene.all()),
             tuple(selection.ids), tuple(selection.subobjects),
             len(history._undo), len(history._redo))
 
@@ -75,6 +75,16 @@ def _assert_translated(shape, original, offset):
     for actual, before in zip(g.bbox(shape), g.bbox(original)):
         expected = tuple(float(c) for c in np.asarray(before) + offset)
         assert actual == pytest.approx(expected, abs=1e-6)
+
+
+def _assert_display_translated(ghost, originals, offset):
+    """A copy preview is a DisplayMesh of the originals' tessellations
+    shifted by the offset, in selection order."""
+    assert ghost is not None, "Copy must show the pending duplicate"
+    base = np.vstack([tessellate(s).vertices for s in originals])
+    np.testing.assert_allclose(ghost.vertices,
+                               base + np.asarray(offset, float).reshape(3),
+                               rtol=0, atol=1e-5)
 
 
 @pytest.mark.parametrize("stage", ["selection", "base", "target", "repeated-target"])
@@ -123,7 +133,7 @@ def test_vertical_projects_a_copy_and_its_pure_preview_onto_the_base_normal(
     _plane(ctx, plane)
     untouched = scene.add(g.make_box((50, 40, 30), 2, 3, 4), name="Leave this")
     obj = _start(scene, selection, proc, base=None)
-    originals = {o.id: g.shape_to_bytes(o.shape) for o in scene.all()}
+    originals = {o.id: _geometry(o.shape) for o in scene.all()}
     original = obj.shape
     if enable_at == "base":
         _vertical(proc)
@@ -137,8 +147,7 @@ def test_vertical_projects_a_copy_and_its_pure_preview_onto_the_base_normal(
     ghost = (proc.preview_for(TARGET) if input_mode == "mouse-point"
              else proc.preview_shape("19,-6,11"))
 
-    assert ghost is not None, "Vertical Copy must show the pending duplicate"
-    _assert_translated(ghost, original, offset)
+    _assert_display_translated(ghost, [original], offset)
     assert _state(scene, selection, history) == before
     assert proc.busy and proc.request is request
     if input_mode == "mouse-point":
@@ -148,11 +157,11 @@ def test_vertical_projects_a_copy_and_its_pure_preview_onto_the_base_normal(
     made = _copies(scene, originals)
     assert len(made) == 1 and made[0].id != obj.id
     _assert_translated(made[0].shape, original, offset)
-    assert _geometry(made[0].shape) == _geometry(ghost)
+    assert _geometry(made[0].shape) == _geometry(g.translate(original, offset))
     assert proc.busy and isinstance(proc.request, PointReq), "Copy waits for another target"
     assert dict(proc.option_chips())["Vertical"] == "Yes"
-    assert g.shape_to_bytes(scene.get(obj.id).shape) == originals[obj.id]
-    assert g.shape_to_bytes(scene.get(untouched.id).shape) == originals[untouched.id]
+    assert _geometry(scene.get(obj.id).shape) == originals[obj.id]
+    assert _geometry(scene.get(untouched.id).shape) == originals[untouched.id]
     proc.provide_text("")
     assert not proc.busy
 
@@ -173,14 +182,14 @@ def test_vertical_copies_accept_signed_zero_and_unit_distances_without_mouse_aim
 
     ghost = proc.preview_shape(text)
 
-    assert ghost is not None, "A typed Vertical distance must work without a mouse direction"
-    _assert_translated(ghost, original, distance * plane.normal)
+    _assert_display_translated(ghost, [original], distance * plane.normal)
     assert _state(scene, selection, history) == before
     proc.provide_text(text)
     made = _copies(scene, [obj.id])
     assert len(made) == 1, "The distance must create a copy instead of requesting coordinates"
     _assert_translated(made[0].shape, original, distance * plane.normal)
-    assert _geometry(made[0].shape) == _geometry(ghost)
+    assert _geometry(made[0].shape) == _geometry(
+        g.translate(original, distance * plane.normal))
     assert _geometry(scene.get(obj.id).shape) == _geometry(original)
     assert proc.busy
     proc.provide_text("")
@@ -213,14 +222,15 @@ def test_turning_vertical_off_restores_copy_and_a_new_copy_starts_off(env):
     obj = _start(scene, selection, proc)
     original = obj.shape
     _vertical(proc)
-    _assert_translated(proc.preview_for(TARGET), original, np.asarray((0, 0, 8)))
+    _assert_display_translated(proc.preview_for(TARGET), [original],
+                              np.asarray((0, 0, 8)))
     proc.provide(TARGET)
     vertical_copy = _copies(scene, [obj.id])[0]
 
     _vertical(proc, "No")
 
     ordinary = np.subtract(TARGET, BASE)
-    _assert_translated(proc.preview_for(TARGET), original, ordinary)
+    _assert_display_translated(proc.preview_for(TARGET), [original], ordinary)
     proc.provide(TARGET)
     made = _copies(scene, [obj.id, vertical_copy.id])
     assert len(made) == 1
@@ -244,7 +254,7 @@ def test_ordinary_copy_keeps_zero_as_the_world_origin(env):
     original = obj.shape
     before = _state(scene, selection, history)
     ghost = proc.preview_shape("0")
-    _assert_translated(ghost, original, -np.asarray(BASE))
+    _assert_display_translated(ghost, [original], -np.asarray(BASE))
     assert _state(scene, selection, history) == before
 
     proc.provide_text("0")
@@ -267,12 +277,13 @@ def test_vertical_copy_keeps_the_base_normal_across_viewport_changes_and_repeats
     _vertical(proc)
     offset = np.dot(np.subtract(TARGET, BASE), plane.normal) * plane.normal
 
-    _assert_translated(proc.preview_for(TARGET), original, offset)
+    _assert_display_translated(proc.preview_for(TARGET), [original], offset)
     proc.provide(TARGET)
     first = _copies(scene, [obj.id])[0]
     _assert_translated(first.shape, original, offset)
     _plane(ctx, cp.PRESETS["right"]())
-    _assert_translated(proc.preview_shape("-4"), original, -4 * plane.normal)
+    _assert_display_translated(proc.preview_shape("-4"), [original],
+                               -4 * plane.normal)
     proc.provide_text("-4")
     second = _copies(scene, [obj.id, first.id])
     assert len(second) == 1
@@ -293,7 +304,7 @@ def test_repeated_copies_keep_original_sources_metadata_and_undo_redo(env, verti
     untouched = scene.add(g.make_box((50, 40, 30), 2, 3, 4), name="Leave this")
     sources = [box, curve]
     originals = {obj.id: obj.shape for obj in scene.all()}
-    original_bytes = {obj.id: g.shape_to_bytes(obj.shape) for obj in scene.all()}
+    original_geos = {obj.id: _geometry(obj.shape) for obj in scene.all()}
     selection.set([obj.id for obj in sources])
     assert proc.run("copy")
     proc.provide(BASE)
@@ -307,8 +318,8 @@ def test_repeated_copies_keep_original_sources_metadata_and_undo_redo(env, verti
         previous = {obj.id for obj in scene.all()}
         request = proc.request
         ghost = proc.preview_for(target)
-        expected = g.make_compound([g.translate(originals[obj.id], offset) for obj in sources])
-        assert _geometry(ghost) == _geometry(expected), "Only the original selection is previewed"
+        _assert_display_translated(ghost, [originals[obj.id] for obj in sources],
+                                  offset)
         assert _state(scene, selection, history) == before
         assert proc.request is request
 
@@ -316,13 +327,14 @@ def test_repeated_copies_keep_original_sources_metadata_and_undo_redo(env, verti
 
         made = _copies(scene, previous)
         assert len(made) == 2, "Every target copies both original sources exactly once"
-        assert _geometry(g.make_compound([obj.shape for obj in made])) == _geometry(ghost)
+        assert _geometry(g.make_compound([obj.shape for obj in made])) == _geometry(
+            g.make_compound([g.translate(originals[src.id], offset) for src in sources]))
         for copy, source in zip(made, sources):
             _assert_translated(copy.shape, originals[source.id], offset)
             for field in ("layer_id", "color", "material", "annotation", "group_id"):
                 assert getattr(copy, field) == getattr(source, field)
-        for obj_id, shape_bytes in original_bytes.items():
-            assert g.shape_to_bytes(scene.get(obj_id).shape) == shape_bytes
+        for obj_id, geo in original_geos.items():
+            assert _geometry(scene.get(obj_id).shape) == geo
         assert proc.busy
     proc.provide_text("")
     assert not proc.busy
@@ -366,15 +378,20 @@ def _start_window(window):
     return obj
 
 
-def _assert_all_panes_show(window, expected):
-    mesh = tessellate(expected)
+def _assert_all_panes_show(window, obj, offset):
+    """The copy preview is a ghost mesh: the original's own tessellation
+    shifted by the offset, drawn in every pane."""
+    base = tessellate(obj.shape)
+    shift = np.asarray(offset, float).reshape(3)
     panes = list(window.all_viewports())
     assert len(panes) == 4
     for pane in panes:
         assert pane._ghost is not None, f"{pane._view_name} must show the pending copy"
         triangles, segments = pane._ghost_geometry()
-        np.testing.assert_allclose(segments, mesh.edge_segments.reshape(-1, 3), rtol=0, atol=1e-5)
-        np.testing.assert_allclose(triangles, mesh.vertices[mesh.triangles.ravel()], rtol=0, atol=1e-5)
+        np.testing.assert_allclose(
+            segments, base.edge_segments.reshape(-1, 3) + shift, rtol=0, atol=1e-5)
+        np.testing.assert_allclose(
+            triangles, base.vertices[base.triangles.ravel()] + shift, rtol=0, atol=1e-5)
 
 
 @pytest.mark.parametrize("finish", ["enter", "cancel-before-first", "cancel-after-first"])
@@ -390,7 +407,7 @@ def test_v_enter_and_typed_copy_previews_reach_all_panes_and_clear_at_finish(win
     _type(window, "3cm")
 
     expected = g.translate(original, (0, 0, 30))
-    _assert_all_panes_show(window, expected)
+    _assert_all_panes_show(window, obj, (0, 0, 30))
     assert _state(window.scene, window.selection, window.history) == before
     if finish == "cancel-before-first":
         window.processor.cancel()
@@ -404,7 +421,7 @@ def test_v_enter_and_typed_copy_previews_reach_all_panes_and_clear_at_finish(win
         assert _geometry(made[0].shape) == _geometry(expected)
         before = _state(window.scene, window.selection, window.history)
         _type(window, "-2.5")
-        _assert_all_panes_show(window, g.translate(original, (0, 0, -2.5)))
+        _assert_all_panes_show(window, obj, (0, 0, -2.5))
         assert _state(window.scene, window.selection, window.history) == before
         if finish == "enter":
             _type(window, "")
@@ -427,22 +444,21 @@ def test_v_enter_and_typed_copy_previews_reach_all_panes_and_clear_at_finish(win
 
 def test_the_vertical_copy_chip_updates_current_typed_preview_and_cursor_in_all_panes(window):
     obj = _start_window(window)
-    original = obj.shape
     front = next(vp for vp in window.all_viewports() if vp._view_name == "front")
     ordinary_cursor = front.world_point_at(400, 200)
     _type(window, "19,-6,11")
-    _assert_all_panes_show(window, g.translate(original, np.subtract(TARGET, BASE)))
+    _assert_all_panes_show(window, obj, np.subtract(TARGET, BASE))
     before = _state(window.scene, window.selection, window.history)
     request = window.processor.request
 
     window.command_line.optionClicked.emit("Vertical")
 
-    _assert_all_panes_show(window, g.translate(original, (0, 0, 8)))
+    _assert_all_panes_show(window, obj, (0, 0, 8))
     assert window.processor.request is request
     assert _state(window.scene, window.selection, window.history) == before
     assert front.world_point_at(400, 200)[:2] == pytest.approx(BASE[:2], abs=1e-6)
     window.command_line.optionClicked.emit("Vertical")
-    _assert_all_panes_show(window, g.translate(original, np.subtract(TARGET, BASE)))
+    _assert_all_panes_show(window, obj, np.subtract(TARGET, BASE))
     assert front.world_point_at(400, 200) == pytest.approx(ordinary_cursor, abs=1e-6)
 
 
@@ -466,7 +482,7 @@ def test_the_mouse_can_copy_along_the_vertical_from_another_pane(window, view):
                         Qt.KeyboardModifier.NoModifier)
     pane.mouseMoveEvent(event)
     expected = g.translate(original, (0, 0, upper[2] - BASE[2]))
-    _assert_all_panes_show(window, expected)
+    _assert_all_panes_show(window, obj, (0, 0, upper[2] - BASE[2]))
     assert _state(window.scene, window.selection, window.history) == before
 
     QTest.mouseClick(pane, Qt.MouseButton.LeftButton, pos=QPoint(400, 200))
@@ -479,7 +495,7 @@ def test_the_mouse_can_copy_along_the_vertical_from_another_pane(window, view):
                         Qt.MouseButton.NoButton, Qt.MouseButton.NoButton,
                         Qt.KeyboardModifier.NoModifier)
     pane.mouseMoveEvent(event)
-    _assert_all_panes_show(window, g.translate(original, (0, 0, lower[2] - BASE[2])))
+    _assert_all_panes_show(window, obj, (0, 0, lower[2] - BASE[2]))
     QTest.mouseClick(pane, Qt.MouseButton.LeftButton, pos=QPoint(400, 400))
     made = _copies(window.scene, [obj.id])
     assert len(made) == 2
