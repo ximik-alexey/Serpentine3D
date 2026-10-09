@@ -1303,8 +1303,6 @@ class Viewport(QOpenGLWidget):
         """
         if self._paint_failed:
             return              # said why once; not once per repaint
-        import time
-        t0 = time.perf_counter()
         try:
             self._paint_frame()
         except Exception:                                       # noqa: BLE001
@@ -1315,10 +1313,6 @@ class Viewport(QOpenGLWidget):
             print("serp3d: this viewport has stopped drawing after the "
                   "error above. Redocking it, or reopening the window, "
                   "builds a new context and tries again.", file=sys.stderr)
-        dt = time.perf_counter() - t0
-        if dt > 0.05:
-            with open("/tmp/serp3d-perf.log", "a") as f:
-                f.write(f"frame {self.space} {dt*1000:.0f} ms\n")
 
     def _paint_frame(self):
         # Every way of moving the camera ends up here, so this is where the
@@ -2057,8 +2051,6 @@ class Viewport(QOpenGLWidget):
         - a background tessellation finishing, which makes an object drawable
           with no change to the scene at all.
         """
-        import time
-        t0 = time.perf_counter()
         _flush_buffer_deletes()
         key = self._gpu_sync_key()
         if self._gpu_synced == key:
@@ -2100,10 +2092,6 @@ class Viewport(QOpenGLWidget):
             self._centre_cache = {uid: c for uid, c
                                   in self._centre_cache.items()
                                   if uid in live_meshes}
-        dt = time.perf_counter() - t0
-        if dt > 0.03:
-            with open("/tmp/serp3d-perf.log", "a") as f:
-                f.write(f"sync_gpu {dt*1000:.0f} ms\n")
 
     def _worker_pool(self):
         if self._tess_pool is None:

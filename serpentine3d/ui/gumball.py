@@ -951,17 +951,6 @@ class Gumball:
             # over a whole drawing costs more than the measuring used to.
             boxes = np.array([o.bbox() for o in objs], float)
             anchor = (boxes[:, 0].min(axis=0) + boxes[:, 1].max(axis=0)) / 2
-            last = getattr(self, "_last_gumball_log", None)
-            if last is None or np.linalg.norm(anchor - last) > 1e-6:
-                self._last_gumball_log = anchor
-                with open("/tmp/serp3d-perf.log", "a") as f:
-                    lo, hi = boxes[:, 0].min(axis=0), boxes[:, 1].max(axis=0)
-                    f.write(f"gumball anchor "
-                            f"({anchor[0]:.3f}, {anchor[1]:.3f}, "
-                            f"{anchor[2]:.3f}) "
-                            f"box=({lo[0]:.3f}, {lo[1]:.3f}, {lo[2]:.3f}).."
-                            f"({hi[0]:.3f}, {hi[1]:.3f}, {hi[2]:.3f}) "
-                            f"n={len(objs)}\n")
         if self.align == "world" and self.vp._detail_eye() is None:
             return anchor, (np.array([1.0, 0.0, 0.0]),
                             np.array([0.0, 1.0, 0.0]),
