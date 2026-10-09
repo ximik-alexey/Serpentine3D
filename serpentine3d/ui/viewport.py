@@ -1618,9 +1618,11 @@ class Viewport(QOpenGLWidget):
         """
         if not objects:
             return objects
-        bounds = [obj.mesh.bounds() if obj.mesh_ready else None
-                  for obj in objects]
-        boxes = [(i, b) for i, b in enumerate(bounds) if b is not None]
+        boxes = []
+        for i, obj in enumerate(objects):
+            b = obj.bbox()
+            if b[0] != b[1]:
+                boxes.append((i, b))
         if not boxes:
             return objects              # nothing to judge them on: draw them
         m = np.asarray(mvp, dtype=np.float64)
@@ -1911,14 +1913,25 @@ class Viewport(QOpenGLWidget):
             if not obj.mesh_ready:
                 continue
             mesh = obj.mesh
-            centre = cache.get(mesh.uid)
-            if centre is None:
+            pose = obj.transform
+            if pose is _IDENTITY:
+                centre = cache.get(mesh.uid)
+                if centre is None:
+                    b = mesh.bounds()
+                    if b is None:
+                        continue
+                    centre = (np.asarray(b[0], float)
+                              + np.asarray(b[1], float)) / 2
+                    cache[mesh.uid] = centre
+            else:
+                # posed: the centre rides the pose, and a move keeps the
+                # mesh, so the mesh-keyed cache would go stale
                 b = mesh.bounds()
                 if b is None:
                     continue
                 centre = (np.asarray(b[0], float)
                           + np.asarray(b[1], float)) / 2
-                cache[mesh.uid] = centre
+                centre = world_points(centre.reshape(1, 3), obj)[0]
             centres[i] = centre
             valid[i] = True
         return centres, valid
@@ -2247,9 +2260,13 @@ class Viewport(QOpenGLWidget):
             else:
                 # The mesh is local: what the tessellator saw. The pose
                 # carries it to the world, folded in before the anchor so
-                # the far-grid fix holds for a posed object too.
-                pmvp = pose @ mvp
-                pview = pose @ view
+                # the far-grid fix holds for a posed object too. The pose
+                # goes between the mesh and the camera — pose first, then
+                # the camera: pose @ mvp would run the camera on local
+                # vertices and then pose the screen point, which is a
+                # point nowhere, and the model would draw off the frame.
+                pmvp = mvp @ pose
+                pview = view @ pose
                 omvp = (np.asarray(pmvp, np.float32)
                        if gpu.anchor is None
                        else anchored(pmvp, gpu.anchor))

@@ -19,6 +19,8 @@ on awkward input.
 import numpy as np
 import pytest
 
+from serpentine3d.core.scene import _IDENTITY
+
 from serpentine3d.ui.viewport import _back_to_front
 
 
@@ -88,9 +90,10 @@ class FakeMesh:
 
 
 class FakeObject:
-    def __init__(self, mesh=None):
+    def __init__(self, mesh=None, transform=_IDENTITY):
         self.mesh = mesh
         self.mesh_ready = mesh is not None
+        self.transform = transform
 
 
 @pytest.fixture

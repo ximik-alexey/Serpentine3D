@@ -96,8 +96,11 @@ def test_the_highlight_rides_the_mesh_anchor(rig):
     rec, view, obj = rig
     seg = np.array([[[0.0, 0, 0], [10.0, 0, 0]]]) + FAR
     obj.mesh.edge_segments = seg
-    obj.mesh.vertices = seg.reshape(-1, 3)    # bounds follow, or the
-    view.camera.target = FAR.copy()           # cull throws the pick out
+    obj.mesh.vertices = seg.reshape(-1, 3)    # the highlight data, far
+    t = np.eye(4)
+    t[:3, 3] = FAR                           # the pose carries the object
+    view.scene.set_transforms({obj.id: t})   # to far, so the cull keeps it
+    view.camera.target = FAR.copy()
     view.camera.distance = 40.0
     view._gpu[obj.id].anchor = FAR.copy()
     view.selection.toggle_subobject(obj.id, "edge", 0)
