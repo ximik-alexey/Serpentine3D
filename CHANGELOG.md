@@ -24,10 +24,6 @@
   now, linework when the worker is clear — and small scenes are
   unchanged.
 
-- **Object snaps are ~15× faster on big models.** Snap queries pre-filter
-  the scene with a screen-space box before the per-object math, so a
-  cursor over an 884-part assembly costs 3.6 ms instead of 53 ms.
-
 ## 0.10.9 (2026-10-07)
 
 ### Added
