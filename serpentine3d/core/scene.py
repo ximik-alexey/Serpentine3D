@@ -107,11 +107,15 @@ def _trsf_from_matrix(m) -> gp_Trsf | None:
     return t
 
 def _fold_location(shape):
-    """`(local shape, location)`: the pose of `shape` pulled out of it.
+    """`(geometry in world coordinates, None)`: an incoming location, applied.
 
     A shape can carry its own location (an imported part does). The
-    object stores geometry without the pose and the pose as a location,
-    so an incoming shape is split there.
+    object stores the geometry in world coordinates with no pose; the
+    pose is what the user *moves* the object by, and that one rides a
+    location from then on. Baking on the way in keeps a loaded scene on
+    the unposed fast path: a pose is a per-frame cost, and a file's
+    authoring transform is not one to pay on every frame, in every
+    viewport.
     """
     if shape is None or isinstance(shape, DeferredShape) \
             or not hasattr(shape, "Location"):
@@ -119,7 +123,13 @@ def _fold_location(shape):
     loc = shape.Location()
     if loc.IsIdentity():
         return shape, None
-    return shape.Located(TopLoc_Location()), loc
+    m = location_matrix(loc)
+    if m is None:
+        return shape, None
+    # Reset the location first: `BRepBuilderAPI_Transform` keeps a shape's
+    # location on the copy it makes, so baking on top of it would apply
+    # the file's transform twice.
+    return geometry.apply_matrix(shape.Located(TopLoc_Location()), m), None
 
 
 @dataclass
