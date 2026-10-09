@@ -653,10 +653,12 @@ class Scene:
         old = obj._location
         old_m = obj.transform
         if trsf is not None and hasattr(obj._shape, "Located"):
-            # The pose is composed, the geometry is not touched. `Multiplied`
-            # applies the argument first, then itself, which is the move
-            # after the pose: the world is m applied to what it was.
-            obj._location = (old.Multiplied(TopLoc_Location(trsf))
+            # The pose is composed, the geometry is not touched. The
+            # location is built as m @ old, the same order as `_transform`
+            # below, so both keep describing the one pose: `Multiplied`
+            # applies the argument first, then itself, which is the old
+            # pose with the move applied after it.
+            obj._location = (TopLoc_Location(trsf).Multiplied(old)
                             if old is not None and not old.IsIdentity()
                             else TopLoc_Location(trsf))
             obj._transform = m @ old_m
