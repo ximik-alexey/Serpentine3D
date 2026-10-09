@@ -1122,7 +1122,7 @@ class Viewport(QOpenGLWidget):
         self._preview: _LineBatch | None = None
         self._preview_data = np.zeros((0, 3), np.float32)
         self._ghost = None                     # DisplayMesh of pending result
-        self._ghost_offset = None             # a move ghost's offset, ridden
+        self._ghost_pose = None               # a move/rotate ghost's 4x4,
                                              # in the draw matrix
         self._ghost_base = None               # (base compound, its mesh) of a
                                              # move ghost, drawn with the
@@ -3159,7 +3159,7 @@ class Viewport(QOpenGLWidget):
             self.layout_view.set_ghost_detail(None)
             self.layout_view._ghost_note = shape
             self._ghost = None
-            self._ghost_offset = None
+            self._ghost_pose = None
             self.update()
             return
         if isinstance(shape, DetailView):
@@ -3170,7 +3170,7 @@ class Viewport(QOpenGLWidget):
         self.layout_view.set_ghost_detail(None)
         if isinstance(shape, PictureShape):
             self._ghost = None
-            self._ghost_offset = None
+            self._ghost_pose = None
             plane = dict(shape.plane)
             plane["alpha"] = float(shape.plane.get("alpha", 1.0)) * 0.55
             ghost = PictureShape(plane)
@@ -3185,19 +3185,19 @@ class Viewport(QOpenGLWidget):
             if self._ghost is not None or had_picture or had_note:
                 self._ghost = None
                 self._ghost_base = None
-                self._ghost_offset = None
+                self._ghost_pose = None
                 self.update()
             return
         try:
             from ..core.tessellate import tessellate
-            if hasattr(shape, "base") and hasattr(shape, "offset"):
-                # A move ghost is the same geometry under a new offset:
-                # the tessellated cache is drawn as-is and the offset
-                # goes into the draw matrix, the way a posed object's
-                # location does — a tick shifts a 4x4, not the vertices,
-                # and the compound is tessellated only when its base
-                # changes.
-                self._ghost_offset = shape.offset
+            if hasattr(shape, "base") and hasattr(shape, "pose"):
+                # A move or rotate ghost is the same geometry under a
+                # new 4x4: the tessellated cache is drawn as-is and
+                # the matrix goes into the draw matrix, the way a posed
+                # object's location does — a tick shifts a 4x4, not the
+                # vertices, and the compound is tessellated only when
+                # its base changes.
+                self._ghost_pose = shape.pose
                 cached = getattr(self, "_ghost_base", None)
                 if cached is not None and cached[0] is shape.base:
                     self._ghost = cached[1]
@@ -3213,11 +3213,11 @@ class Viewport(QOpenGLWidget):
                         self._ghost = base
             else:
                 self._ghost_base = None
-                self._ghost_offset = None
+                self._ghost_pose = None
                 self._ghost = tessellate(shape)
         except Exception:                                  # noqa: BLE001
             self._ghost = None
-            self._ghost_offset = None
+            self._ghost_pose = None
         self.update()
 
     def _clip_frames(self):
@@ -3272,13 +3272,17 @@ class Viewport(QOpenGLWidget):
         segs = (dm.edge_segments.reshape(-1, 3)
                 if len(dm.edge_segments) else None)
         if self.space != "model" and self._drawing_through() is not None:
-            # A sheet has no matrix to carry a move's offset, so here it
-            # is added to the geometry before the model-to-sheet mapping;
-            # in model space the same offset rides the draw matrix.
-            off = self._ghost_offset
-            if off is not None:
-                tris = None if tris is None else tris + np.asarray(off)
-                segs = None if segs is None else segs + np.asarray(off)
+            # A sheet has no matrix to carry a ghost's pose, so here
+            # it is applied to the geometry before the model-to-sheet
+            # mapping; in model space the same pose rides the draw
+            # matrix.
+            pose = self._ghost_pose
+            if pose is not None:
+                m = np.asarray(pose, float)
+                tris = (None if tris is None
+                        else tris @ m[:3, :3].T + m[:3, 3])
+                segs = (None if segs is None
+                        else segs @ m[:3, :3].T + m[:3, 3])
             tris = None if tris is None else self._on_paper(tris)
             segs = None if segs is None else self._on_paper(segs)
         return tris, segs
@@ -3286,14 +3290,12 @@ class Viewport(QOpenGLWidget):
     def _draw_ghost(self, mvp):
         if self._preview is None:
             return
-        off = self._ghost_offset
-        if off is not None and self.space == "model":
-            # The mesh is the base, un-moved: the offset carries it to
+        pose = self._ghost_pose
+        if pose is not None and self.space == "model":
+            # The mesh is the base, un-moved: the pose carries it to
             # the preview position, folded in the way a posed object's
             # location is — between the mesh and the camera.
-            t = np.eye(4)
-            t[:3, 3] = off
-            mvp = mvp @ t
+            mvp = mvp @ np.asarray(pose, np.float32)
         tris, segs = self._ghost_geometry()
         points = self._ghost.points if self._ghost is not None else []
         if (len(points) and self.space != "model"

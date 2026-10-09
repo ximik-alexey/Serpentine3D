@@ -1079,7 +1079,7 @@ def test_rotate_by_reference_direction(env):
     proc.provide_text("0,0,0")           # center
     proc.provide_text("1,0,0")           # reference direction +X
     ghost = proc.preview_for((0.0, 1.0, 0.0))   # dragged to +Y
-    assert g.bbox(ghost)[1][1] == pytest.approx(2, abs=1e-6)
+    assert g.bbox(ghost.shape)[1][1] == pytest.approx(2, abs=1e-6)
     proc.provide_text("0,1,0")           # commit 90 degrees
     assert not proc.busy
     assert g.bbox(scene.all()[0].shape)[1][1] == pytest.approx(2, abs=1e-6)
@@ -1093,7 +1093,7 @@ def test_move_and_mirror_previews(env):
     proc.finish_selection()
     proc.provide_text("0,0,0")
     ghost = proc.preview_for((10.0, 0.0, 0.0))
-    assert g.bbox(ghost)[0][0] == pytest.approx(10)
+    assert g.bbox(ghost.shape)[0][0] == pytest.approx(10)
     proc.provide_text("10,0,0")
     assert not proc.busy
 

@@ -43,6 +43,13 @@ class _MovedGhost:
         self.ready = ready
 
     @property
+    def pose(self):
+        # The 4x4 the panes ride in the draw matrix instead of the
+        # offset: a translation is the common case, and a rotation
+        # ghost carries its turn the same way.
+        return translation_matrix(self.offset)
+
+    @property
     def shape(self):
         # Built on first read, not per tick: the panes shift a
         # tessellated cache by the offset, and the translated B-rep
@@ -50,6 +57,36 @@ class _MovedGhost:
         if self._shape is None:
             from ..core import geometry as g
             self._shape = g.translate(self.base, self.offset)
+        return self._shape
+
+
+class _RotatedGhost:
+    """The same compound turned about (center, axis) by a new angle.
+
+    A rotate preview is the same geometry under a new orientation, and
+    rotating every B-rep per tick is the drag killer: a pane that
+    receives this shifts a tessellated cache by the rotation matrix
+    instead. `shape` is the rotated B-rep, built lazily for the few
+    places that actually ask for it.
+    """
+    def __init__(self, base, center, axis, angle, ready=None):
+        self.base = base
+        self.center = center
+        self.axis = axis
+        self.angle = angle
+        self._shape = None
+        self.ready = ready
+
+    @property
+    def pose(self):
+        return rotation_matrix(self.center, self.axis, self.angle)
+
+    @property
+    def shape(self):
+        if self._shape is None:
+            from ..core import geometry as g
+            self._shape = g.rotate(
+                self.base, self.center, self.axis, self.angle)
         return self._shape
 
 def _ghost_mesh(base, parts):
@@ -545,6 +582,21 @@ def cmd_rotate(ctx):
         held, objs = yield from _what_to_transform(ctx, "Select objects to rotate")
     center = yield PointReq("Center of rotation")
     axis = (0.0, 0.0, 1.0) if lv is not None else tuple(ctx.cplane.normal)
+    # The ghost's base compound is tessellated once, off the main
+    # thread, while the user picks the reference point: the first tick
+    # of the drag must not pay for it, and a tick must not rotate
+    # every B-rep of the drawing.
+    ghost_ready = {}
+    def _prepare_ghost():
+        try:
+            ghost_ready["mesh"] = _ghost_mesh(_base,
+                                             [o.shape for o in objs])
+        except Exception as exc:                          # noqa: BLE001
+            ghost_ready["failed"] = str(exc)
+    _base = _ghost(objs, lambda s: s)
+    if _base is not None:
+        import threading
+        threading.Thread(target=_prepare_ghost, daemon=True).start()
     ref = yield PointReq("Angle in degrees, or first reference point",
                          rubber_from=center, allow_number=True)
     if isinstance(ref, float):
@@ -563,9 +615,20 @@ def cmd_rotate(ctx):
 
         def _preview(p):
             a = p if isinstance(p, float) else _angle(p)
-            return _preview_of(ctx, held, objs,
-                               lambda s: g.rotate(s, center, axis, a),
-                               action=("rotate", center, axis, a))
+            if (any(v for k, v in held.items() if k in
+                    ("cv", "segment", "face", "edge"))
+                    or _base is None):
+                # partial sub-object turns, and a paper rotate, keep
+                # the generic path
+                return _preview_of(ctx, held, objs,
+                                   lambda s: g.rotate(s, center, axis, a),
+                                   action=("rotate", center, axis, a))
+            # The ghost of a plain turn is the same compound under a
+            # new orientation: the pane shifts the tessellated cache
+            # the worker is building by the rotation matrix, so no tick
+            # rotates a B-rep.
+            return _RotatedGhost(_base, center, axis, a,
+                                 ready=ghost_ready)
 
         p2 = yield PointReq("Angle, or second reference point",
                             rubber_from=center, allow_number=True,
