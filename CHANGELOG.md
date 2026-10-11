@@ -47,7 +47,9 @@
   was eaten and a second one was needed. The panel now locates the
   indicator by the row's depth and toggles it in place — one click on
   any row's box flips visibility, the branch arrow still expands and
-  collapses groups, and a click never scrolls the tree.
+  collapses groups, and a click never scrolls the tree. With one or
+  more objects selected, clicking any of their boxes flips the whole
+  selection, not just that row.
 
 ## 0.10.8 (2026-10-05)
 

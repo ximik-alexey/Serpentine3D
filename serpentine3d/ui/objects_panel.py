@@ -190,18 +190,38 @@ class ObjectsPanel(QWidget):
                     0, Qt.CheckState.Checked if visible
                     else Qt.CheckState.Unchecked)
         else:
-            # Single object: if part of multi-selection, toggle all
-            selected = self.tree.selectedItems()
-            if len(selected) > 1:
-                for it in selected:
-                    d = it.data(0, Qt.ItemDataRole.UserRole)
-                    if d is not None and not isinstance(d, list):
-                        it.setCheckState(
-                            0, Qt.CheckState.Checked if visible
-                            else Qt.CheckState.Unchecked)
-                        self.scene.update(d, visible=visible)
-            else:
-                self.scene.update(data, visible=visible)
+            # Single object. Selection-wide toggles are handled in the
+            # event filter, where the manual selection lives (the tree
+            # is NoSelection, so selectedItems() is always empty).
+            self.scene.update(data, visible=visible)
+        self._updating = False
+
+    def _set_visible(self, ids, visible):
+        """Set visibility for several objects and sync their boxes."""
+        self._updating = True
+        state = Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked
+        for oid in ids:
+            self.scene.update(oid, visible=visible)
+            item = self._item_by_id(oid)
+            if item is not None:
+                item.setCheckState(0, state)
+        self._updating = False
+
+    def _item_by_id(self, oid):
+        """Find the row for an object id (top-level or group child)."""
+        def find(item):
+            if item.data(0, Qt.ItemDataRole.UserRole) == oid:
+                return item
+            for i in range(item.childCount()):
+                hit = find(item.child(i))
+                if hit is not None:
+                    return hit
+            return None
+        for i in range(self.tree.topLevelItemCount()):
+            hit = find(self.tree.topLevelItem(i))
+            if hit is not None:
+                return hit
+        return None
         self._updating = False
 
     def eventFilter(self, obj, event):
@@ -230,13 +250,19 @@ class ObjectsPanel(QWidget):
         left = ind * (depth + 1)
         if left <= event.pos().x() < left + ind:
             # Checkbox indicator: toggle here and consume the press, so
-            # one click flips the box (a child's indicator lives past
-            # the old x < 25 strip, where the press used to be eaten)
-            # and the click never scrolls the tree.
+            # one click flips the box and the click never scrolls the
+            # tree. If the clicked object is part of the current
+            # selection (one or more selected), the click toggles the
+            # whole selection, not just that row.
             state = item.checkState(0)
-            item.setCheckState(
-                0, Qt.CheckState.Checked if state == Qt.CheckState.Unchecked
-                else Qt.CheckState.Unchecked)
+            visible = state == Qt.CheckState.Unchecked
+            ids = self._ids_from_item(item)
+            if self._selected_ids and set(ids) & self._selected_ids:
+                self._set_visible(sorted(self._selected_ids), visible)
+            else:
+                item.setCheckState(
+                    0, Qt.CheckState.Checked if visible
+                    else Qt.CheckState.Unchecked)
             return True
         if event.pos().x() < left:
             # Branch cell: the expand arrow, kept working by hand.
