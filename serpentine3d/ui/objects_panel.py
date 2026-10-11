@@ -102,7 +102,11 @@ class ObjectsPanel(QWidget):
         self._updating = True
         self.tree.setUpdatesEnabled(False)
         self.tree.blockSignals(True)
-        self.tree.clear()
+        # takeTopLevelItem transfers ownership to Python: the C++ object
+        # stays alive until the reference is dropped, avoiding shiboken's
+        # "already deleted" when Qt's model still points at it.
+        while self.tree.topLevelItemCount() > 0:
+            _ = self.tree.takeTopLevelItem(0)
 
         objs = self.scene.all()
         page = self._page
@@ -125,7 +129,6 @@ class ObjectsPanel(QWidget):
                 item.setSelected(True)
             self.tree.addTopLevelItem(item)
 
-        # page indicator row (fresh each rebuild: clear() kills the old one)
         label = QTreeWidgetItem(
             ["", "", f"{page + 1} / {self._total_pages()}"])
         label.setFlags(Qt.ItemFlag.NoItemFlags)
