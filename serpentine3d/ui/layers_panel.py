@@ -485,8 +485,12 @@ class LayersPanel(QWidget):
         """Update an existing row in place, or add a new one."""
         item = existing.get(layer.id)
         if item is not None:
-            item.setHidden(False)
-            self._fill_row(item, layer, counts)
+            try:
+                item.setHidden(False)
+                self._fill_row(item, layer, counts)
+            except RuntimeError:
+                # C++ item was deleted (drag/drop, dock resize); skip.
+                self._add_row(layer, parent_item, counts)
             for child in self.scene.layers.children(layer.id):
                 self._update_or_add(child, item, counts, existing)
             return
