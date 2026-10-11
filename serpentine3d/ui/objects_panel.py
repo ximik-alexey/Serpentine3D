@@ -48,8 +48,6 @@ class ObjectsPanel(QWidget):
         # Pagination controls
         self._prev_btn = QPushButton("‹")
         self._next_btn = QPushButton("›")
-        self._page_label = QTreeWidgetItem(["", "", ""])
-        self._page_label.setFlags(Qt.ItemFlag.NoItemFlags)
 
         self._prev_btn.setFixedWidth(28)
         self._next_btn.setFixedWidth(28)
@@ -112,9 +110,10 @@ class ObjectsPanel(QWidget):
             item.setBackground(0, tint)
             self.tree.addTopLevelItem(item)
 
-        # page indicator row
-        self.tree.addTopLevelItem(self._page_label)
-        self._page_label.setText(1, f"{page + 1} / {self._total_pages()}")
+        # page indicator row (fresh each rebuild: clear() kills the old one)
+        label = QTreeWidgetItem(["", "", f"{page + 1} / {self._total_pages()}"])
+        label.setFlags(Qt.ItemFlag.NoItemFlags)
+        self.tree.addTopLevelItem(label)
         self._prev_btn.setEnabled(page > 0)
         self._next_btn.setEnabled(page < self._total_pages() - 1)
 
