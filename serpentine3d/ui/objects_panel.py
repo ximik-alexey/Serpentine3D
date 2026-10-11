@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -28,6 +28,8 @@ class ObjectsPanel(QWidget):
 
     Bidirectional selection: picking a row selects it in the viewport;
     selecting in the viewport jumps to the right page and highlights.
+    Rapid notifications are coalesced into one rebuild via a zero-timer,
+    so opening a 94-part file costs one redraw, not 94.
     """
 
     def __init__(self, scene, selection=None, parent=None):
@@ -67,10 +69,25 @@ class ObjectsPanel(QWidget):
         layout.addLayout(row)
 
         self.tree.itemSelectionChanged.connect(self._on_panel_select)
-        scene.add_listener(self.rebuild, kinds=("objects",))
+
+        # Debounce: coalesce N rapid scene notifications into 1 rebuild.
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(0)
+        self._timer.timeout.connect(self.rebuild)
+        self._dirty = False
+        scene.add_listener(self._on_notify, kinds=("objects",))
         if selection is not None:
             selection.add_listener(self._on_scene_select)
         self.rebuild()
+
+    # -- debounced notification -------------------------------------------
+
+    def _on_notify(self):
+        """Scene changed: schedule a rebuild on the next event loop tick."""
+        self._dirty = True
+        if not self._timer.isActive():
+            self._timer.start()
 
     # -- pagination ---------------------------------------------------------
 
@@ -102,11 +119,8 @@ class ObjectsPanel(QWidget):
         self._updating = True
         self.tree.setUpdatesEnabled(False)
         self.tree.blockSignals(True)
-        # takeTopLevelItem transfers ownership to Python: the C++ object
-        # stays alive until the reference is dropped, avoiding shiboken's
-        # "already deleted" when Qt's model still points at it.
         while self.tree.topLevelItemCount() > 0:
-            _ = self.tree.takeTopLevelItem(0)
+            self.tree.takeTopLevelItem(0)
 
         objs = self.scene.all()
         page = self._page
