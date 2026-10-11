@@ -163,6 +163,7 @@ class ObjectsPanel(QWidget):
         """User picked rows in the tree: select them in the scene."""
         if self._updating or self.selection is None:
             return
+        scroll = self.tree.verticalScrollBar().value()
         self._refresh_colors()
         items = self.tree.selectedItems()
         ids = [it.data(0, Qt.ItemDataRole.UserRole)
@@ -170,6 +171,8 @@ class ObjectsPanel(QWidget):
                if it.data(0, Qt.ItemDataRole.UserRole)]
         if ids:
             self.selection.set(ids)
+        QTimer.singleShot(
+            0, lambda: self.tree.verticalScrollBar().setValue(scroll))
 
     def _on_scene_select(self):
         """Scene selection changed: update row colors in place."""
