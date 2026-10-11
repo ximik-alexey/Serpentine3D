@@ -60,6 +60,8 @@ class ObjectsPanel(QWidget):
         """Redraw the list from the scene."""
         self._updating = True
         self.list.clear()
+        from . import theme
+        hl = QColor(theme.ACCENT)
         selected_ids = (set(self.selection._ids)
                        if self.selection else set())
         for obj in self.scene.all():
@@ -67,13 +69,15 @@ class ObjectsPanel(QWidget):
             text = f"{vis}{obj.name}  [{_kind_label(obj.kind)}]"
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, obj.id)
-            c = self.scene.color_of(obj)
-            tint = QColor(int(c[0] * 255), int(c[1] * 255),
-                         int(c[2] * 255))
-            tint.setAlpha(40)
-            item.setBackground(tint)
             if obj.id in selected_ids:
+                item.setBackground(hl)
                 item.setSelected(True)
+            else:
+                c = self.scene.color_of(obj)
+                tint = QColor(int(c[0] * 255), int(c[1] * 255),
+                             int(c[2] * 255))
+                tint.setAlpha(40)
+                item.setBackground(tint)
             self.list.addItem(item)
         self._updating = False
 
