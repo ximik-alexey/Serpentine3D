@@ -79,10 +79,32 @@ class ObjectsPanel(QWidget):
 
     # -- selection ----------------------------------------------------------
 
+    def _refresh_colors(self):
+        """Update row backgrounds: selected rows get a highlight."""
+        from . import theme
+        hl = QColor(theme.ACCENT)
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            obj_id = item.data(Qt.ItemDataRole.UserRole)
+            if obj_id is None:
+                continue
+            obj = self.scene.get(obj_id)
+            if obj is None:
+                continue
+            if item.isSelected():
+                item.setBackground(hl)
+            else:
+                c = self.scene.color_of(obj)
+                tint = QColor(int(c[0] * 255), int(c[1] * 255),
+                             int(c[2] * 255))
+                tint.setAlpha(40)
+                item.setBackground(tint)
+
     def _on_select(self):
         """User picked rows in the list: select them in the scene."""
         if self._updating or self.selection is None:
             return
+        self._refresh_colors()
         items = self.list.selectedItems()
         ids = [it.data(Qt.ItemDataRole.UserRole)
                for it in items
