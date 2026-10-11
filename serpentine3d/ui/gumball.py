@@ -56,7 +56,11 @@ def _pose_of(shape) -> np.ndarray:
 
     A held original is the shape the drag began on, located when its
     object had a pose, and the location of that view is the pose.
+    Mesh shapes carry no BRep location — their vertices are in world
+    space, so the pose is the identity.
     """
+    if not hasattr(shape, "Location"):
+        return np.eye(4)
     m = location_matrix(shape.Location())
     return m if m is not None else np.eye(4)
 

@@ -106,7 +106,7 @@ static int read_to_meshes(const char* path, const char* out_path,
                     int nt_ = tri->NbTriangles();
                     int base = (int)md.verts.size() / 3;
                     for (int i = 1; i <= nn; ++i) {
-                        const gp_Pnt& p = tri->Node(i);
+                        gp_Pnt p = tri->Node(i).Transformed(loc);
                         md.verts.push_back((float)p.X());
                         md.verts.push_back((float)p.Y());
                         md.verts.push_back((float)p.Z());
