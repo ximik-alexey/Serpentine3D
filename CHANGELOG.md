@@ -56,6 +56,12 @@
   collapses groups, and a click never scrolls the tree. With one or
   more objects selected, clicking any of their boxes flips the whole
   selection, not just that row.
+- **Non-Latin (for example Cyrillic) names in STEP files display correctly
+  (#68).** The OCCT 8.0.1 reader stores the product name in the ID field
+  and re-encodes the file's hex escapes as single-byte code points, so
+  non-ASCII product names came out as mojibake. Import now reads the ID
+  field and undoes the re-encoding, decoding the decimal escapes to
+  UTF-8 as well. Plain ASCII names are unaffected.
 
 ## 0.10.8 (2026-10-05)
 

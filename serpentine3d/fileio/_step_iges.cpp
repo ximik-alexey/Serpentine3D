@@ -52,13 +52,120 @@ struct Part {
     double c[3]; // placement anchor (world-space)
 };
 
+// Decode STEP string escapes to display names. The 8.0.1 reader
+// transforms the hex escapes itself (each \Xhh byte becomes the
+// UTF-8 encoding of U+00hh) and keeps the decimal escapes (\ddd)
+// literal, so both are undone here:
+//   U+00hh code point -> raw byte hh (undo the reader's conversion)
+//   \ddd              -> UCS-2 code point, encoded to UTF-8
+//   \Xhh literal      -> raw byte hh (in case the reader kept it)
+static std::string step_unescape(const std::string& s) {
+    std::string out;
+    std::string pending; // raw bytes of a UTF-8 sequence
+    auto flush = [&]() {
+        out += pending;
+        pending.clear();
+    };
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\\' && i + 1 < s.size()) {
+            char n = s[i + 1];
+            if (n == 'X') {
+                size_t j = i + 2;
+                if (j < s.size() && s[j] == '\\')
+                    ++j;
+                int v = 0, nd = 0;
+                for (; j < s.size() && nd < 2; ++j) {
+                    char c = s[j];
+                    int d = (c >= '0' && c <= '9') ? c - '0'
+                            : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                            : (c >= 'A' && c <= 'F') ? c - 'A' + 10
+                            : -1;
+                    if (d < 0)
+                        break;
+                    v = v * 16 + d;
+                    ++nd;
+                }
+                if (nd == 0) {
+                    out += s[i];
+                    continue;
+                }
+                pending += (char)v;
+                i = j - 1;
+                continue;
+            }
+            if (n >= '0' && n <= '9') {
+                int v = 0;
+                size_t j = i + 1;
+                while (j < s.size() && s[j] >= '0' && s[j] <= '9') {
+                    v = v * 10 + (s[j] - '0');
+                    ++j;
+                }
+                flush();
+                if (v < 0x80) {
+                    out += (char)v;
+                } else if (v < 0x800) {
+                    out += (char)(0xC0 | (v >> 6));
+                    out += (char)(0x80 | (v & 0x3F));
+                } else {
+                    out += (char)(0xE0 | (v >> 12));
+                    out += (char)(0x80 | ((v >> 6) & 0x3F));
+                    out += (char)(0x80 | (v & 0x3F));
+                }
+                i = j - 1;
+                continue;
+            }
+        }
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x80) {
+            flush();
+            out += c;
+            continue;
+        }
+        int len = 0, v = 0;
+        if ((c & 0xE0) == 0xC0) { v = c & 0x1F; len = 2; }
+        else if ((c & 0xF0) == 0xE0) { v = c & 0x0F; len = 3; }
+        else if ((c & 0xF8) == 0xF0) { v = c & 0x07; len = 4; }
+        if (len == 0 || i + (size_t)len > s.size()) {
+            flush();
+            out += c;
+            continue;
+        }
+        for (size_t k = 1; k < (size_t)len; ++k)
+            v = (v << 6) | (s[i + k] & 0x3F);
+        i += (size_t)len - 1;
+        if (v < 0x100)
+            pending += (char)v; // undo the reader's \Xhh conversion
+        else {
+            flush();
+            if (v < 0x800) {
+                out += (char)(0xC0 | (v >> 6));
+                out += (char)(0x80 | (v & 0x3F));
+            } else if (v < 0x10000) {
+                out += (char)(0xE0 | (v >> 12));
+                out += (char)(0x80 | ((v >> 6) & 0x3F));
+                out += (char)(0x80 | (v & 0x3F));
+            } else {
+                out += (char)(0xF0 | (v >> 18));
+                out += (char)(0x80 | ((v >> 12) & 0x3F));
+                out += (char)(0x80 | ((v >> 6) & 0x3F));
+                out += (char)(0x80 | (v & 0x3F));
+            }
+        }
+    }
+    flush();
+    return out;
+}
+
 static std::string pdef_product(const Handle(StepBasic_ProductDefinition)& pd) {
     if (pd.IsNull()) return std::string();
     Handle(StepBasic_ProductDefinitionFormation) f = pd->Formation();
     if (f.IsNull()) return std::string();
     Handle(StepBasic_Product) p = f->OfProduct();
     if (p.IsNull()) return std::string();
-    return std::string(p->Name()->ToCString());
+    // The 8.0.1 reader driver maps the file's field 1 (the name per
+    // the AP214 schema) to Id() and field 2 (the id) to Name(), so a
+    // standard file's display name is what Name() calls "id".
+    return step_unescape(std::string(p->Id()->ToCString()));
 }
 
 static Handle(Standard_Transient) find_by_label(
