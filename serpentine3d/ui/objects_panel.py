@@ -232,6 +232,7 @@ class ObjectsPanel(QWidget):
                 self._selected_rows.discard(row)
             else:
                 self._selected_rows.add(row)
+            self._anchor_row = row
         else:
             self._selected_rows = {row}
             self._anchor_row = row
