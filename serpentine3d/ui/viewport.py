@@ -2994,8 +2994,9 @@ class Viewport(QOpenGLWidget):
         proportional to curvature."""
         if not self.comb_enabled:
             return
+        from Core.BRepLProp import BRepLProp_CLProps
+
         from ..core import geometry as _g
-        from OCP.BRepLProp import BRepLProp_CLProps
         GL.glDisable(GL.GL_DEPTH_TEST)
         for obj_id in list(self.comb_enabled):
             obj = self.scene.get(obj_id)
@@ -4121,8 +4122,8 @@ class Viewport(QOpenGLWidget):
         if hasattr(shape, "face") and callable(shape.face):
             shape = shape.face()                  # a picture's own plane
         try:
-            from OCP.BRepExtrema import BRepExtrema_DistShapeShape
-            from OCP.gp import gp_Pnt
+            from Core.BRepExtrema import BRepExtrema_DistShapeShape
+            from Core.gp import gp_Pnt
             from ..core import geometry as g
             origin, direction = self._eye().ray_through(
                 px, py, self.width(), self.height())

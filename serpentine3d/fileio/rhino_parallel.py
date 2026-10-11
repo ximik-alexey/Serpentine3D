@@ -50,7 +50,7 @@ import traceback
 
 import numpy as np
 import rhino3dm as r3
-from OCP.BinTools import bintools
+from Core.BinTools import bintools
 
 from ..core.mesh import MeshShape
 from ..utils.spawn import spawn_executable as _spawn_executable
@@ -216,7 +216,6 @@ def _encode(shape):
     """A shape as something pickle can carry."""
     if isinstance(shape, MeshShape):
         return ("mesh", shape.vertices, shape.triangles, shape.normals)
-    from OCP.BinTools import BinTools
     buf = io.BytesIO()
     bintools.Write(shape, buf)
     return ("occ", buf.getvalue(), None, None)
@@ -226,8 +225,7 @@ def _decode(payload):
     kind, first, second, third = payload
     if kind == "mesh":
         return MeshShape(first, second, third)
-    from OCP.BinTools import BinTools
-    from OCP.TopoDS import TopoDS_Shape
+    from Core.TopoDS import TopoDS_Shape
     shape = TopoDS_Shape()
     bintools.Read(shape, io.BytesIO(first))
     # BinTools answers a bare TopoDS_Shape whatever it was handed, and OCCT's
@@ -669,7 +667,7 @@ def _stop(proc, cancel, finished: bool) -> None:
 
     Closing the pipe is its last act after stopping its pool, so a reader that
     got that far has nothing of ours left running in it — only a spawned
-    interpreter unloading OCP and rhino3dm, which takes about two seconds. We
+    interpreter unloading Core and rhino3dm, which takes about two seconds. We
     used to spend them inside a join, and a join reports nothing, so the bar
     sat frozen at 95% with every object already converted. Nobody is waiting
     on that exit, so we stop watching it.

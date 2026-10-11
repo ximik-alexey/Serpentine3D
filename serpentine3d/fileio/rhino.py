@@ -16,9 +16,9 @@ import threading
 
 import numpy as np
 import rhino3dm as r3
-from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
-from OCP.BRepLib import breplib
-from OCP.TopLoc import TopLoc_Location
+from Core.GeomAPI import GeomAPI_ProjectPointOnSurf
+from Core.BRepLib import breplib
+from Core.TopLoc import TopLoc_Location
 
 from ..core import geometry, occ
 from ..core.deferred import DeferredShape
@@ -137,9 +137,9 @@ def _shape_to_r3_curve(shape) -> r3.NurbsCurve | None:
 
 def _r3_surface_to_face(srf: r3.Surface):
     ns = srf if isinstance(srf, r3.NurbsSurface) else srf.ToNurbsSurface()
-    from OCP.Geom import Geom_BSplineSurface
-    from OCP.TColgp import TColgp_Array2OfPnt
-    from OCP.TColStd import TColStd_Array2OfReal
+    from Core.Geom import Geom_BSplineSurface
+    from Core.TColgp import TColgp_Array2OfPnt
+    from Core.TColStd import TColStd_Array2OfReal
 
     cu, cv = ns.Points.CountU, ns.Points.CountV
     du, dv = ns.Degree(0), ns.Degree(1)
@@ -335,7 +335,7 @@ def _place_trim(sas, surf, pts, closed, at_pole, tol, seed=None) -> list:
     sample sits on a pole, its free parameter comes from its neighbour, so
     the pole's own edge spans the pinched side properly.
     """
-    from OCP.gp import gp_Pnt2d
+    from Core.gp import gp_Pnt2d
     n = len(pts)
     mid = n // 2
     uv = [None] * n
@@ -374,7 +374,7 @@ def _trim_placements(sas, surf, pts, closed, at_pole, walked_twice, tol) -> list
     the loop walks twice, which is a seam whatever its samples show. Two as
     well for an edge that fits either side of the seam as closely.
     """
-    from OCP.gp import gp_Pnt2d
+    from Core.gp import gp_Pnt2d
     n = len(pts)
     base = _place_trim(sas, surf, pts, closed, at_pole, tol)
 
@@ -508,10 +508,10 @@ def _fit_trim(it, sas, surf, closed, tol, rounds=4):
     """The trim's curve on the surface through its samples, with more
     samples wherever it strays from the edge: an edge that skims the seam
     swings quickly in (u, v), and too few samples overshoot across it."""
-    from OCP.Geom2dAPI import Geom2dAPI_Interpolate
-    from OCP.gp import gp_Pnt2d
-    from OCP.TColgp import TColgp_HArray1OfPnt2d
-    from OCP.TColStd import TColStd_HArray1OfReal
+    from Core.Geom2dAPI import Geom2dAPI_Interpolate
+    from Core.gp import gp_Pnt2d
+    from Core.TColgp import TColgp_HArray1OfPnt2d
+    from Core.TColStd import TColStd_HArray1OfReal
     ad, ts, uv = it["curve"], list(it["ts"]), list(it["uv"])
     curve = None
     for _ in range(rounds + 1):
@@ -547,16 +547,15 @@ def _fit_trim(it, sas, surf, closed, tol, rounds=4):
 
 
 def _build_from_trims(rface, surf, table, vertices, tol):
-    from OCP.BRep import BRep_Builder, BRep_Tool
-    from OCP.BRepAdaptor import BRepAdaptor_Curve
-    from OCP.BRepLib import BRepLib
-    from OCP.Geom2d import Geom2d_Line, Geom2d_TrimmedCurve
-    from OCP.ShapeAnalysis import ShapeAnalysis_Surface
-    from OCP.TopAbs import TopAbs_FORWARD, TopAbs_REVERSED
-    from OCP.TopLoc import TopLoc_Location
-    from OCP.TopoDS import (TopoDS, TopoDS_Edge, TopoDS_Face,
+    from Core.BRep import BRep_Builder, BRep_Tool
+    from Core.BRepAdaptor import BRepAdaptor_Curve
+    from Core.Geom2d import Geom2d_Line, Geom2d_TrimmedCurve
+    from Core.gp import gp_Dir2d, gp_Pnt, gp_Pnt2d
+    from Core.ShapeAnalysis import ShapeAnalysis_Surface
+    from Core.TopAbs import TopAbs_FORWARD, TopAbs_REVERSED
+    from Core.TopLoc import TopLoc_Location
+    from Core.TopoDS import (TopoDS_Edge, TopoDS_Face,
                             TopoDS_Vertex, TopoDS_Wire)
-    from OCP.gp import gp_Dir2d, gp_Pnt, gp_Pnt2d
 
     sas = ShapeAnalysis_Surface(surf)
     bb = BRep_Builder()
@@ -681,10 +680,8 @@ def _face_from_edge_loops(rface, surf, table: dict):
     distinct edges at all, and no amount of joining them end to end closes
     it. Only the trim's own direction tells the two passes apart.
     """
-    from OCP.BRepBuilderAPI import (BRepBuilderAPI_MakeFace,
-                                    BRepBuilderAPI_MakeWire)
-    from OCP.ShapeFix import ShapeFix_Face
-    from OCP.TopoDS import TopoDS
+    from Core.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeWire
+    from Core.ShapeFix import ShapeFix_Face
 
     loops = rface.Loops
     if loops is None or len(loops) == 0:
@@ -769,7 +766,8 @@ def _split_face_by_edges(face, edges: list) -> list:
 
 def _classify_by_mesh(pieces: list, mesh_shape, tol: float) -> list:
     """Keep split pieces whose centroid lies on the reference mesh."""
-    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+    from Core.BRepExtrema import BRepExtrema_DistShapeShape
+
     from ..core.occ import BRepBuilderAPI_MakeVertex, gp_Pnt
     kept = []
     for piece in pieces:
@@ -808,7 +806,7 @@ def _group_closed_wires(edges: list) -> list:
 def _shape_box(shape, tol: float = 0.0):
     """(min, max) corners of a shape's bounding box, grown by `tol`. None if
     the box comes back void."""
-    from OCP.Bnd import Bnd_Box
+    from Core.Bnd import Bnd_Box
     box = Bnd_Box()
     try:
         geometry.occ.bbox_add(shape, box)
@@ -979,9 +977,9 @@ def _trimmed_face(surf, edges: list):
     loops as further boundaries; bounded surfaces treat them as holes.
     """
     import numpy as np
-    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
-    from OCP.GeomAdaptor import GeomAdaptor_Surface
-    from OCP.ShapeFix import ShapeFix_Face
+    from Core.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from Core.GeomAdaptor import GeomAdaptor_Surface
+    from Core.ShapeFix import ShapeFix_Face
 
     wires = _group_closed_wires(edges)
     if not wires:
@@ -1041,7 +1039,7 @@ def _face_shapes(brep, fi: int, occ_edges: list, edge_boxes,
     polysurface is otherwise one worker's problem for two minutes while the
     rest of the pool watches (GitHub #5).
     """
-    from OCP.BRep import BRep_Tool
+    from Core.BRep import BRep_Tool
     rface = brep.Faces[fi]
     try:
         face = _r3_surface_to_face(rface.ToNurbsSurface())
@@ -1131,8 +1129,8 @@ def _assemble_faces(faces) -> list:
     if len(brep_faces) == 1:
         # a face can close on itself, a sphere's round its seam and poles,
         # and that is a solid as surely as a sewn shell is (#34)
-        from OCP.BRep import BRep_Builder
-        from OCP.TopoDS import TopoDS_Shell
+        from Core.BRep import BRep_Builder
+        from Core.TopoDS import TopoDS_Shell
         shell = TopoDS_Shell()
         builder = BRep_Builder()
         builder.MakeShell(shell)
@@ -1173,14 +1171,13 @@ def _shell_to_solid(shape):
     if shape is None or shape.IsNull():
         return shape
     if shape.ShapeType() == geometry.occ.SHELL:
-        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid
-        from OCP.BRepClass3d import BRepClass3d_SolidClassifier
-        from OCP.TopAbs import TopAbs_State
-        from OCP.TopoDS import TopoDS
+        from Core.BRepBuilderAPI import BRepBuilderAPI_MakeSolid
+        from Core.BRepClass3d import BRepClass3d_SolidClassifier
+        from Core.TopAbs import TopAbs_State
         shell = geometry.occ.to_shell(shape)
         # measured, not read off the shell's flag: sewing does not always
         # set it, and a watertight import then stayed open (#34)
-        from OCP.BRep import BRep_Tool
+        from Core.BRep import BRep_Tool
         if BRep_Tool.IsClosed(shell):
             try:
                 mk = BRepBuilderAPI_MakeSolid(shell)

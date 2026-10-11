@@ -171,12 +171,12 @@ def _vertex_curvature(face, tri, n: int, reversed_face: bool) -> np.ndarray:
     if not tri.HasUVNodes():
         return curv
     try:
-        from OCP.BRepAdaptor import BRepAdaptor_Surface
-        from OCP.BRepLProp import BRepLProp_SLProps
-        from OCP.Geom import GeomAbs_Compound, GeomAbs_OtherSurface
+        from Core.BRepAdaptor import BRepAdaptor_Surface
+        from Core.BRepLProp import BRepLProp_SLProps
+        from Core.GeomAbs import GeomAbs_OtherSurface
         surf = BRepAdaptor_Surface(face)
         stype = surf.GetType()
-        if stype in (GeomAbs_Compound, GeomAbs_OtherSurface):
+        if stype == GeomAbs_OtherSurface:
             return curv
         props = BRepLProp_SLProps(surf, 2, 1e-6)
         sign = -1.0 if reversed_face else 1.0
@@ -233,8 +233,8 @@ def _is_flat(face, surf) -> bool:
     profile, or any extrusion read out of a .3dm, where every face
     comes in as a BSpline no matter how straight it is.
     """
-    from OCP.BRepLib import BRepLib_FindSurface
-    from OCP.GeomAbs import GeomAbs_SurfaceType as T
+    from Core.BRepLib import BRepLib_FindSurface
+    from Core.GeomAbs import GeomAbs_SurfaceType as T
 
     kind = surf.GetType()
     if kind == T.GeomAbs_Plane:

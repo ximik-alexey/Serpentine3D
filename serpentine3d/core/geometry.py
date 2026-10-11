@@ -11,33 +11,61 @@ import os
 import struct
 import tempfile
 
-from . import occ
-from .tolerance import tight, tol
-from .occ import (
-    gp_Pnt, gp_Vec, gp_Dir, gp_Ax1, gp_Ax2, gp_Trsf, gp_GTrsf, gp_Circ,
-    gp_Elips, gp_XYZ, gp_Mat,
-    TopoDS_Shape, TopoDS_Compound, TopExp_Explorer, TopLoc_Location,
-    BRep_Builder,
-    BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeFace,
-    BRepBuilderAPI_MakeVertex, BRepBuilderAPI_Transform,
-    BRepBuilderAPI_GTransform, BRepBuilderAPI_Copy,
-    BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol, BRepPrimAPI_MakeBox,
-    BRepPrimAPI_MakeSphere, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeCone,
-    BRepPrimAPI_MakeTorus,
-    BRepAlgoAPI_Fuse, BRepAlgoAPI_Cut, BRepAlgoAPI_Common,
-    BRepOffsetAPI_ThruSections, BRepOffsetAPI_MakePipe,
-    GC_MakeArcOfCircle, GC_MakeCircle,
-    GeomAPI_Interpolate, GeomAPI_PointsToBSpline,
-    Geom_BSplineCurve,
-    TColgp_Array1OfPnt, TColgp_HArray1OfPnt, TColStd_Array1OfReal,
-    TColStd_Array1OfInteger,
-    Bnd_Box, BRepCheck_Analyzer,
-)
-from OCP.TopExp import topexp
-from OCP.BRepTools import breptools
-from OCP.BRepLib import breplib
+from Core.BRepLib import breplib
+from Core.BRepTools import breptools
+from Core.GeomConvert import geomconvert
+from Core.TopExp import topexp
 
-from OCP.GeomConvert import geomconvert
+from . import occ
+from .occ import (
+    Bnd_Box,
+    BRep_Builder,
+    BRepAlgoAPI_Common,
+    BRepAlgoAPI_Cut,
+    BRepAlgoAPI_Fuse,
+    BRepBuilderAPI_Copy,
+    BRepBuilderAPI_GTransform,
+    BRepBuilderAPI_MakeEdge,
+    BRepBuilderAPI_MakeFace,
+    BRepBuilderAPI_MakeVertex,
+    BRepBuilderAPI_MakeWire,
+    BRepBuilderAPI_Transform,
+    BRepCheck_Analyzer,
+    BRepOffsetAPI_MakePipe,
+    BRepOffsetAPI_ThruSections,
+    BRepPrimAPI_MakeBox,
+    BRepPrimAPI_MakeCone,
+    BRepPrimAPI_MakeCylinder,
+    BRepPrimAPI_MakePrism,
+    BRepPrimAPI_MakeRevol,
+    BRepPrimAPI_MakeSphere,
+    BRepPrimAPI_MakeTorus,
+    GC_MakeArcOfCircle,
+    GC_MakeCircle,
+    GeomAPI_Interpolate,
+    GeomAPI_PointsToBSpline,
+    Geom_BSplineCurve,
+    TColgp_Array1OfPnt,
+    TColgp_HArray1OfPnt,
+    TColStd_Array1OfInteger,
+    TColStd_Array1OfReal,
+    TopExp_Explorer,
+    TopLoc_Location,
+    TopoDS_Compound,
+    TopoDS_Shape,
+    gp_Ax1,
+    gp_Ax2,
+    gp_Circ,
+    gp_Dir,
+    gp_Elips,
+    gp_GTrsf,
+    gp_Mat,
+    gp_Pnt,
+    gp_Trsf,
+    gp_Vec,
+    gp_XYZ,
+)
+from .tolerance import tight, tol
 
 Point = tuple[float, float, float]
 class GeometryError(Exception):
@@ -351,7 +379,7 @@ def to_wire(shape) -> TopoDS_Shape:
     raise GeometryError(f"Cannot convert {shape_kind(shape)} to wire")
 def join_curves(shapes: list) -> TopoDS_Shape:
     """Join edges/wires into a single wire (must connect end-to-end)."""
-    from OCP.TopTools import TopTools_ListOfShape
+    from Core.TopTools import TopTools_ListOfShape
 
     edges = []
     for shape in shapes:
@@ -378,7 +406,7 @@ def join_surfaces(shapes: list) -> TopoDS_Shape:
     tell a clean join from a partial one rather than trusting this to have
     merged everything it was handed.
     """
-    from OCP.BRepCheck import BRepCheck_Shell, BRepCheck_Status
+    from Core.BRepCheck import BRepCheck_Shell, BRepCheck_Status
 
     from .occ import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
     sew = BRepBuilderAPI_Sewing(tol())
@@ -427,7 +455,7 @@ def merge_coplanar_faces(shape) -> TopoDS_Shape:
     faces that share a surface, and unify the edges that share a curve so
     the redundant seams do not linger as splits in the remaining faces.
     """
-    from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
+    from Core.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
     up = ShapeUpgrade_UnifySameDomain(shape, True, True, False)
     up.Build()
     return up.Shape()
@@ -582,7 +610,7 @@ def _loose_curves_of(shape):
     edge is that curve, so it answers directly rather than by recursion."""
     if shape.ShapeType() != occ.COMPOUND:
         return None
-    from OCP.TopoDS import TopoDS_Iterator
+    from Core.TopoDS import TopoDS_Iterator
     kids = []
     it = TopoDS_Iterator(shape)
     while it.More():
@@ -758,10 +786,10 @@ def fillet_edges(shape, radius, edges: list | None = None,
     elif radius <= 0:
         raise GeometryError("Radius must be positive")
     if chamfer:
-        from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer
+        from Core.BRepFilletAPI import BRepFilletAPI_MakeChamfer
         mk = BRepFilletAPI_MakeChamfer(shape)
     else:
-        from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
+        from Core.BRepFilletAPI import BRepFilletAPI_MakeFillet
         mk = BRepFilletAPI_MakeFillet(shape)
     # ChFi3d's `Add` binding takes a typed edge: an edge picked on a
     # located shape comes out of `edges_of` as a located shape, so it
@@ -770,7 +798,7 @@ def fillet_edges(shape, radius, edges: list | None = None,
                for e in (edges if edges is not None else edges_of(shape))]
     if not targets:
         raise GeometryError("No edges to fillet")
-    from OCP.Standard import Standard_Failure
+    from Core.Standard import Standard_Failure
     verb = "Chamfer" if chamfer else "Fillet"
     failure = (f"{verb} failed — the radius or distance may be too large "
                "for the smallest edges; try a smaller value")
@@ -793,9 +821,9 @@ def fillet_edges(shape, radius, edges: list | None = None,
     return unwrap_compound(mk.Shape())
 def face_normal(face) -> Point:
     """Outward normal of a (near-)planar face, respecting orientation."""
-    from OCP.BRepAdaptor import BRepAdaptor_Surface
-    from OCP.GeomAbs import GeomAbs_SurfaceType
-    from OCP.TopAbs import TopAbs_Orientation
+    from Core.BRepAdaptor import BRepAdaptor_Surface
+    from Core.GeomAbs import GeomAbs_SurfaceType
+    from Core.TopAbs import TopAbs_Orientation
     surf = BRepAdaptor_Surface(face)
     if surf.GetType() != GeomAbs_SurfaceType.GeomAbs_Plane:
         raise GeometryError("Face is not planar")
@@ -810,9 +838,9 @@ def face_point_normal(face):
     area centroid can fall off the surface, e.g. a full cylinder wall).
     Returns (point, normal) as 3-tuples; normal follows the face
     orientation (outward on a solid)."""
-    from OCP.BRepAdaptor import BRepAdaptor_Surface
-    from OCP.BRepLProp import BRepLProp_SLProps
-    from OCP.TopAbs import TopAbs_Orientation
+    from Core.BRepAdaptor import BRepAdaptor_Surface
+    from Core.BRepLProp import BRepLProp_SLProps
+    from Core.TopAbs import TopAbs_Orientation
     surf = BRepAdaptor_Surface(face)
     u = 0.5 * (surf.FirstUParameter() + surf.LastUParameter())
     v = 0.5 * (surf.FirstVParameter() + surf.LastVParameter())
@@ -851,9 +879,9 @@ def offset_faces(shape, offsets: dict) -> TopoDS_Shape:
     and any mix, are handled together. `offsets` maps face_index ->
     distance — e.g. push a cylinder wall to change its radius, or grow a
     slab from both faces at once."""
-    from OCP.BRepCheck import BRepCheck_Analyzer
-    from OCP.BRepOffset import BRepOffset_MakeOffset, BRepOffset_Mode
-    from OCP.GeomAbs import GeomAbs_JoinType
+    from Core.BRepCheck import BRepCheck_Analyzer
+    from Core.BRepOffset import BRepOffset_MakeOffset, BRepOffset_Mode
+    from Core.GeomAbs import GeomAbs_JoinType
     faces = faces_of(shape)
     if not offsets:
         raise GeometryError("No faces to offset")
@@ -927,9 +955,9 @@ def _draft(shape, face, hinge_point, hinge_dir, new_normal):
     way the normal leans.
 
     Returns (result, the face's new index)."""
-    from OCP.BRepCheck import BRepCheck_Analyzer
-    from OCP.BRepOffsetAPI import BRepOffsetAPI_DraftAngle
-    from OCP.gp import gp_Pln
+    from Core.BRepCheck import BRepCheck_Analyzer
+    from Core.BRepOffsetAPI import BRepOffsetAPI_DraftAngle
+    from Core.gp import gp_Pln
     n, _ = _planar_frame(face)
     n2 = tuple(float(v) for v in new_normal)
     cosang = max(-1.0, min(1.0, sum(a * b for a, b in zip(n, n2))))
@@ -976,11 +1004,14 @@ def _rotate_face_rigidly(shape, face_index, pivot, axis, degrees):
     this lets a side become a single ruled patch when its fixed far edge and
     rotated near edge are skew.  Faces outside that one-ring stay intact.
     """
-    from OCP.BRepCheck import (
-        BRepCheck_Analyzer, BRepCheck_Shell, BRepCheck_Status,
+    from Core.BRepCheck import (
+        BRepCheck_Analyzer,
+        BRepCheck_Shell,
+        BRepCheck_Status,
     )
-    from OCP.BRepTools import BRepTools, BRepTools_WireExplorer
-    from OCP.GeomAbs import GeomAbs_CurveType
+    from Core.BRepTools import BRepTools_WireExplorer
+    from Core.GeomAbs import GeomAbs_CurveType
+
     from .occ import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
 
     faces = faces_of(shape)
@@ -1038,8 +1069,8 @@ def _rotate_face_rigidly(shape, face_index, pivot, axis, degrees):
             if len(points) != 4:
                 new_face = patch_surface([boundary])
             else:
-                from OCP.Geom import Geom_BezierSurface
-                from OCP.TColgp import TColgp_Array2OfPnt
+                from Core.Geom import Geom_BezierSurface
+                from Core.TColgp import TColgp_Array2OfPnt
                 poles = TColgp_Array2OfPnt(1, 2, 1, 2)
                 poles.SetValue(1, 1, _pnt(points[0]))
                 poles.SetValue(2, 1, _pnt(points[1]))
@@ -1099,8 +1130,7 @@ def tilt_face(shape, face_index: int, point: Point, axis: Point,
                                 float(degrees))
 def edge_faces(shape, edge_index: int) -> list:
     """Indices of the faces an edge sits between."""
-    from OCP.TopExp import TopExp
-    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+    from Core.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
     edges = edges_of(shape)
     if not (0 <= edge_index < len(edges)):
         raise GeometryError("Edge index out of range")
@@ -1112,7 +1142,7 @@ def edge_faces(shape, edge_index: int) -> list:
 def edge_line(edge):
     """(midpoint, unit direction) of a straight edge; GeometryError for a
     curve."""
-    from OCP.GeomAbs import GeomAbs_CurveType
+    from Core.GeomAbs import GeomAbs_CurveType
     if occ.edge_adaptor(occ.to_edge(edge)).GetType() \
             != GeomAbs_CurveType.GeomAbs_Line:
         raise GeometryError("Only a straight edge can be moved")
@@ -1204,7 +1234,7 @@ def move_parts(shape, faces, edges, delta: Point) -> TopoDS_Shape:
     With one face or one edge held this is what push, slide and move_edge
     already did; with every face held it is a translation.
     """
-    from OCP.BRep import BRep_Tool
+    from Core.BRep import BRep_Tool
     d = tuple(float(v) for v in delta)
     _unit(d)                                  # "Distance is zero"
     flist = faces_of(shape)
@@ -1328,8 +1358,7 @@ def _refit_outline(shape, face_index: int, moved) -> TopoDS_Shape:
     turned one after the other, each found again on the solid the last
     one left behind by the plane it is still in.
     """
-    from OCP.TopExp import TopExp
-    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+    from Core.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
     faces = faces_of(shape)
     if not (0 <= face_index < len(faces)):
         raise GeometryError("Face index out of range")
@@ -1427,7 +1456,7 @@ def scale_face(shape, face_index: int, factor: float,
 def face_long_direction(face) -> Point | None:
     """Unit direction of the longest straight edge of a face, or None when
     it has no straight edges."""
-    from OCP.GeomAbs import GeomAbs_CurveType
+    from Core.GeomAbs import GeomAbs_CurveType
     best, best_len = None, 0.0
     for e in edges_of(face):
         if occ.edge_adaptor(occ.to_edge(e)).GetType() \
@@ -1441,7 +1470,7 @@ def face_long_direction(face) -> Point | None:
     return best
 def cap_holes(shape) -> TopoDS_Shape:
     """Close planar openings of a surface/shell and solidify if possible."""
-    from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
+    from Core.ShapeAnalysis import ShapeAnalysis_FreeBounds
 
     fb = ShapeAnalysis_FreeBounds(shape)
     closed = fb.GetClosedWires()
@@ -1475,14 +1504,13 @@ def cap_holes(shape) -> TopoDS_Shape:
     # Keep every component and only promote shells that are actually closed.
     sewn = join_surfaces([shape, *caps])
     pieces = [join_surfaces([piece]) for piece in joined_pieces(sewn)]
-    from OCP.BRepLib import BRepLib
     for piece in pieces:
         if piece.ShapeType() == occ.SOLID:
             breplib.OrientClosedSolid(occ.to_solid(piece))
     return pieces[0] if len(pieces) == 1 else make_compound(pieces)
 def intersect_shapes(a, b) -> list:
     """Intersection curves between two shapes (surface/solid)."""
-    from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
+    from Core.BRepAlgoAPI import BRepAlgoAPI_Section
     sec = BRepAlgoAPI_Section(a, b)
     sec.Build()
     if not sec.IsDone():
@@ -1511,7 +1539,8 @@ def section_curves(shape, point: Point, normal: Point) -> list:
     sails past are not an error: only the caller knows whether missing
     everything is worth complaining about.
     """
-    from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
+    from Core.BRepAlgoAPI import BRepAlgoAPI_Section
+
     from .occ import gp_Pln
     sec = BRepAlgoAPI_Section(shape, gp_Pln(_pnt(point), _dir(normal)))
     sec.Build()
@@ -1548,7 +1577,6 @@ def face_loops(face, count: int = 96) -> list:
     from it: which ring to run a line around, and which rings to leave
     empty.
     """
-    from OCP.BRepTools import BRepTools
     f = occ.to_face(face)
     outer = breptools.OuterWire(f)
     rings, holes = [], []
@@ -1589,7 +1617,7 @@ def contour(shape, direction: Point = (0, 0, 1),
     return out
 def offset_surface(shape, distance: float) -> TopoDS_Shape:
     """Offset a surface/shell by a distance along its normals."""
-    from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeOffsetShape
+    from Core.BRepOffsetAPI import BRepOffsetAPI_MakeOffsetShape
     mk = BRepOffsetAPI_MakeOffsetShape()
     mk.PerformByJoin(shape, float(distance), tol())
     if not mk.IsDone() or mk.Shape().IsNull():
@@ -1597,8 +1625,8 @@ def offset_surface(shape, distance: float) -> TopoDS_Shape:
     return mk.Shape()
 def shell_solid(shape, thickness: float) -> TopoDS_Shape:
     """Hollow a solid with a uniform wall thickness (negative = inward)."""
-    from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
-    from OCP.TopTools import TopTools_ListOfShape
+    from Core.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
+    from Core.TopTools import TopTools_ListOfShape
     if shape_kind(shape) != "solid":
         raise GeometryError("Shell needs a closed solid")
     mk = BRepOffsetAPI_MakeThickSolid()
@@ -1610,8 +1638,8 @@ def shell_solid(shape, thickness: float) -> TopoDS_Shape:
     return mk.Shape()
 def patch_surface(curves: list, continuity: int = 0) -> TopoDS_Shape:
     """Patch/network surface filling the given boundary curves."""
-    from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeFilling
-    from OCP.GeomAbs import GeomAbs_Shape
+    from Core.BRepOffsetAPI import BRepOffsetAPI_MakeFilling
+    from Core.GeomAbs import GeomAbs_Shape
     cont = (GeomAbs_Shape.GeomAbs_C0 if continuity == 0
             else GeomAbs_Shape.GeomAbs_C1)
     mk = BRepOffsetAPI_MakeFilling()
@@ -1662,7 +1690,7 @@ def blend_curves(a, b, continuity: str = "tangent") -> TopoDS_Shape:
     dist = float(np.linalg.norm(pb - pa))
     if dist < 1e-9:
         raise GeometryError("Curve ends coincide — nothing to blend")
-    from OCP.Geom import Geom_BezierCurve
+    from Core.Geom import Geom_BezierCurve
     if continuity == "position":
         return make_line(tuple(pa), tuple(pb))
     na = ta / (np.linalg.norm(ta) or 1.0)
@@ -1675,7 +1703,7 @@ def blend_curves(a, b, continuity: str = "tangent") -> TopoDS_Shape:
     return BRepBuilderAPI_MakeEdge(Geom_BezierCurve(poles)).Edge()
 def project_curve(curve, target, direction: Point) -> list:
     """Project a curve onto a surface along a direction."""
-    from OCP.BRepProj import BRepProj_Projection
+    from Core.BRepProj import BRepProj_Projection
     wire = occ.to_wire(to_wire(curve))
     proj = BRepProj_Projection(wire, target, _dir(direction))
     out = []
@@ -1687,7 +1715,7 @@ def project_curve(curve, target, direction: Point) -> list:
     return out
 def pull_curve(curve, target) -> list:
     """Pull a curve onto a surface along the surface normals."""
-    from OCP.BRepOffsetAPI import BRepOffsetAPI_NormalProjection
+    from Core.BRepOffsetAPI import BRepOffsetAPI_NormalProjection
     proj = BRepOffsetAPI_NormalProjection(target)
     proj.Add(occ.to_wire(to_wire(curve)))
     proj.Build()
@@ -1703,10 +1731,9 @@ def make_helix(center: Point, radius: float, pitch: float, turns: float,
     """Helical curve winding up `axis` through `center`."""
     if radius <= 0 or pitch <= 0 or turns <= 0:
         raise GeometryError("Helix needs positive radius, pitch and turns")
-    from OCP.Geom import Geom_CylindricalSurface
-    from OCP.Geom2d import Geom2d_Line
-    from OCP.gp import gp_Ax3, gp_Dir2d, gp_Pnt2d
-    from OCP.BRepLib import BRepLib
+    from Core.Geom import Geom_CylindricalSurface
+    from Core.Geom2d import Geom2d_Line
+    from Core.gp import gp_Ax3, gp_Dir2d, gp_Pnt2d
     ax = gp_Ax3(_pnt(center), _dir(axis))
     surf = Geom_CylindricalSurface(ax, float(radius))
     sign = 1.0 if ccw else -1.0
@@ -1721,8 +1748,8 @@ def unroll_face(face) -> list:
 
     Returns the developed boundary as curves (arc-length preserving)."""
     import numpy as np
-    from OCP.BRepAdaptor import BRepAdaptor_Curve2d, BRepAdaptor_Surface
-    from OCP.GeomAbs import GeomAbs_SurfaceType
+    from Core.BRepAdaptor import BRepAdaptor_Curve2d, BRepAdaptor_Surface
+    from Core.GeomAbs import GeomAbs_SurfaceType
 
     faces = faces_of(face)
     if len(faces) != 1:
@@ -1868,7 +1895,7 @@ def sweep2(profile, rail1, rail2) -> TopoDS_Shape:
     return ps.Shape()
 def _curve_pieces(edges: list, cutters: list) -> list:
     """Group split edges into pieces, breaking chains at cut vertices."""
-    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+    from Core.BRepExtrema import BRepExtrema_DistShapeShape
 
     def on_cutter(p: gp_Pnt) -> bool:
         v = BRepBuilderAPI_MakeVertex(p).Vertex()
@@ -2049,8 +2076,7 @@ def _adaptor_with_a_3d_curve(edge):
     null handle that segfaults the moment anything trims or copies it.
     BuildCurve3d computes the missing curve from the pcurve, in place.
     """
-    from OCP.BRepLib import BRepLib
-    from OCP.GeomAbs import GeomAbs_CurveType
+    from Core.GeomAbs import GeomAbs_CurveType
     ad = occ.edge_adaptor(edge)
     if ad.GetType() == GeomAbs_CurveType.GeomAbs_BSplineCurve:
         return ad
@@ -2070,8 +2096,8 @@ def _edge_bspline(shape):
     return _bspline_of_edge(edges[0])
 def _bspline_of_edge(edge):
     """One edge's curve as a fresh Geom_BSplineCurve in the world frame."""
-    from OCP.GeomConvert import geomconvert
-    from OCP.Geom import Geom_TrimmedCurve
+    from Core.Geom import Geom_TrimmedCurve
+    from Core.GeomConvert import geomconvert
     ad = _adaptor_with_a_3d_curve(edge)
     base = ad.Curve().Curve()
     trimmed = Geom_TrimmedCurve(base, ad.FirstParameter(),
@@ -2087,7 +2113,7 @@ def _wire_runs(shape) -> list:
     reversed, so every one of them starts where the one before it finished
     and the poles read along the curve rather than in whatever order the
     file happened to hold."""
-    from OCP.BRepTools import BRepTools_WireExplorer
+    from Core.BRepTools import breptools as BRepTools_WireExplorer
     out = []
     exp = BRepTools_WireExplorer(occ.to_wire(shape))
     while exp.More():
@@ -2206,7 +2232,7 @@ def curve_degree(shape) -> int:
     return max(bs.Degree() for bs in _wire_bsplines(shape))
 def distance_point_to_shape(shape, point: Point) -> float:
     """Shortest distance from a point to anything with an edge or a face."""
-    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+    from Core.BRepExtrema import BRepExtrema_DistShapeShape
     v = BRepBuilderAPI_MakeVertex(_pnt(point)).Vertex()
     dist = BRepExtrema_DistShapeShape(v, shape)
     if not dist.IsDone():
@@ -2254,7 +2280,7 @@ def _face_bspline_surface(shape):
                             "(explode polysurfaces first)")
     face = faces[0]
     surf = BRep_Tool.Surface(face, TopLoc_Location())
-    from OCP.Geom import Geom_BSplineSurface
+    from Core.Geom import Geom_BSplineSurface
     if isinstance(surf, Geom_BSplineSurface):
         return surf.Copy(), face
     try:
@@ -2262,8 +2288,8 @@ def _face_bspline_surface(shape):
     except Exception:
         # infinite analytic surfaces (planes...) need bounding first
         try:
-            from OCP.BRepAdaptor import BRepAdaptor_Surface
-            from OCP.Geom import Geom_RectangularTrimmedSurface
+            from Core.BRepAdaptor import BRepAdaptor_Surface
+            from Core.Geom import Geom_RectangularTrimmedSurface
             ba = BRepAdaptor_Surface(face)
             trimmed = Geom_RectangularTrimmedSurface(
                 surf, ba.FirstUParameter(), ba.LastUParameter(),
@@ -2363,7 +2389,7 @@ def _nearest_place_on(splines, point) -> tuple[int, float]:
     You aim a click at a curve rather than hitting it, so every pick has to
     come back down onto the curve before it means anything.
     """
-    from OCP.GeomAPI import GeomAPI_ProjectPointOnCurve
+    from Core.GeomAPI import GeomAPI_ProjectPointOnCurve
     p = _pnt(point)
     best = None
     for k, bs in enumerate(splines):
@@ -2430,7 +2456,7 @@ def remove_knot(shape, point) -> TopoDS_Shape:
     so there is no limit here. What it actually cost is worth measuring
     afterwards (`max_deviation`) rather than forbidding in advance.
     """
-    from OCP.Precision import Precision
+    from Core.Precision import precision as Precision
     splines = _splines_of(shape)
     k, u = _nearest_place_on(splines, point)
     bs = splines[k]
@@ -2461,7 +2487,7 @@ def _ordered_edges(shape) -> list:
         return [occ.to_edge(shape)]
     if st != occ.WIRE:
         raise GeometryError("Not a curve")
-    from OCP.BRepTools import BRepTools_WireExplorer
+    from Core.BRepTools import breptools as BRepTools_WireExplorer
     out = []
     exp = BRepTools_WireExplorer(occ.to_wire(shape))
     while exp.More():
@@ -2479,8 +2505,8 @@ def _reversed_edge(edge):
     instead, so a circle stays a circle rather than becoming the b-spline
     a conversion would leave.
     """
-    from OCP.BRep import BRep_Tool
-    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from Core.BRep import BRep_Tool
+    from Core.BRepAdaptor import BRepAdaptor_Curve
     curve = BRep_Tool.Curve(edge, TopLoc_Location())[0]
     if curve is None:
         raise GeometryError("That curve has no 3D geometry to reverse")
@@ -2534,9 +2560,9 @@ def direction_arrows(shape, count: int = 8) -> list:
         return _surface_arrows(shape, count)
     raise GeometryError("Nothing here has a direction to show")
 def _curve_arrows(shape, count: int) -> list:
-    from OCP.BRepAdaptor import BRepAdaptor_CompCurve
-    from OCP.GCPnts import GCPnts_UniformAbscissa
-    from OCP.gp import gp_Pnt, gp_Vec
+    from Core.BRepAdaptor import BRepAdaptor_CompCurve
+    from Core.GCPnts import GCPnts_UniformAbscissa
+    from Core.gp import gp_Pnt, gp_Vec
     st = shape.ShapeType()
     if st == occ.WIRE:
         ad = BRepAdaptor_CompCurve(occ.to_wire(shape))
@@ -2561,11 +2587,12 @@ def _curve_arrows(shape, count: int) -> list:
     return out
 def _surface_arrows(shape, count: int) -> list:
     import math
-    from OCP.BRepAdaptor import BRepAdaptor_Surface
-    from OCP.BRepLProp import BRepLProp_SLProps
-    from OCP.BRepTopAdaptor import BRepTopAdaptor_FClass2d
-    from OCP.gp import gp_Pnt2d
-    from OCP.TopAbs import TopAbs_Orientation, TopAbs_State
+
+    from Core.BRepAdaptor import BRepAdaptor_Surface
+    from Core.BRepLProp import BRepLProp_SLProps
+    from Core.BRepTopAdaptor import BRepTopAdaptor_FClass2d
+    from Core.gp import gp_Pnt2d
+    from Core.TopAbs import TopAbs_Orientation, TopAbs_State
     faces = faces_of(shape)
     k = max(1, int(round(math.sqrt(max(int(count), 1)))))
     out = []
@@ -2597,8 +2624,8 @@ def _surface_arrows(shape, count: int) -> list:
     return out
 def sample_curve(shape, count: int) -> list[Point]:
     """`count` points spaced uniformly by arc length along a curve/wire."""
-    from OCP.BRepAdaptor import BRepAdaptor_CompCurve
-    from OCP.GCPnts import GCPnts_UniformAbscissa
+    from Core.BRepAdaptor import BRepAdaptor_CompCurve
+    from Core.GCPnts import GCPnts_UniformAbscissa
     if count < 2:
         raise GeometryError("Need at least 2 sample points")
     st = shape.ShapeType()
@@ -2632,9 +2659,9 @@ def sample_curve_frames(shape, count: int) -> list[tuple]:
     path drawn on the ground gives frames a person would have drawn.
     """
     import numpy as np
-    from OCP.BRepAdaptor import BRepAdaptor_CompCurve
-    from OCP.GCPnts import GCPnts_UniformAbscissa
-    from OCP.gp import gp_Pnt, gp_Vec
+    from Core.BRepAdaptor import BRepAdaptor_CompCurve
+    from Core.GCPnts import GCPnts_UniformAbscissa
+    from Core.gp import gp_Pnt, gp_Vec
     if count < 2:
         raise GeometryError("Need at least 2 sample points")
     st = shape.ShapeType()
@@ -2717,8 +2744,8 @@ def rebuild_curve(shape, point_count: int = 10,
         return make_interp_curve(pts, closed=True)
     if degree == 3:
         return make_interp_curve(pts)
-    from OCP.GeomAPI import GeomAPI_PointsToBSpline
-    from OCP.GeomAbs import GeomAbs_Shape
+    from Core.GeomAbs import GeomAbs_Shape
+    from Core.GeomAPI import GeomAPI_PointsToBSpline
     arr = TColgp_Array1OfPnt(1, len(pts))
     for i, p in enumerate(pts, start=1):
         arr.SetValue(i, _pnt(p))
@@ -2730,8 +2757,8 @@ def rebuild_curve(shape, point_count: int = 10,
     return BRepBuilderAPI_MakeEdge(fit.Curve()).Edge()
 def curvature_at(shape, near_point: Point) -> dict:
     """Curvature of a curve at the point closest to `near_point`."""
-    from OCP.BRepLProp import BRepLProp_CLProps
-    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+    from Core.BRepExtrema import BRepExtrema_DistShapeShape
+    from Core.BRepLProp import BRepLProp_CLProps
     edges = edges_of(shape)
     if not edges:
         raise GeometryError("Not a curve")
@@ -2908,7 +2935,6 @@ def _gtransform(shape, gtrsf) -> TopoDS_Shape:
     from .hatch import HatchShape
     if isinstance(shape, (TextShape, HatchShape)):
         return shape.transformed(_transform_matrix(gtrsf))
-    from OCP.BRepTools import BRepTools
     breptools.Clean(shape)
     result = BRepBuilderAPI_GTransform(shape, gtrsf, True)
     if not result.IsDone():
@@ -2919,7 +2945,7 @@ def _gtransform(shape, gtrsf) -> TopoDS_Shape:
                             "geometry")
     return out
 def _has_null_surface(shape) -> bool:
-    from OCP.BRep import BRep_Tool
+    from Core.BRep import BRep_Tool
     exp = TopExp_Explorer(shape, occ.FACE)
     while exp.More():
         if BRep_Tool.Surface(occ.to_face(exp.Current()), TopLoc_Location()) is None:
@@ -3214,7 +3240,7 @@ def make_point(p: Point) -> TopoDS_Shape:
     from .occ import BRepBuilderAPI_MakeVertex
     return BRepBuilderAPI_MakeVertex(_pnt(p)).Vertex()
 def point_coords(shape) -> Point:
-    from OCP.BRep import BRep_Tool
+    from Core.BRep import BRep_Tool
     p = BRep_Tool.Pnt(occ.to_vertex(shape))
     return (p.X(), p.Y(), p.Z())
 def transform_points(points, fn) -> list:
@@ -3242,8 +3268,7 @@ def free_points(shape) -> list:
         return [point_coords(shape)]
     if shape.ShapeType() != occ.COMPOUND:
         return []
-    from OCP.TopExp import TopExp
-    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+    from Core.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
     owners = TopTools_IndexedDataMapOfShapeListOfShape()
     topexp.MapShapesAndAncestors(shape, occ.VERTEX, occ.EDGE, owners)
     exp = TopExp_Explorer(shape, occ.VERTEX)
@@ -3263,8 +3288,9 @@ def pipe(rail, radius: float, cap: bool = True) -> TopoDS_Shape:
     """Tube of the given radius around a rail curve."""
     if radius <= 0:
         raise GeometryError("Pipe radius must be positive")
-    from OCP.BRepAdaptor import BRepAdaptor_CompCurve
-    from OCP.BRepBuilderAPI import BRepBuilderAPI_TransitionMode
+    from Core.BRepAdaptor import BRepAdaptor_CompCurve
+    from Core.BRepBuilderAPI import BRepBuilderAPI_TransitionMode
+
     from .occ import BRepOffsetAPI_MakePipeShell, gp_Vec
 
     wire = occ.to_wire(to_wire(rail))
@@ -3308,8 +3334,7 @@ def untrim(shape, holes_only: bool = True) -> TopoDS_Shape:
     if len(faces) != 1:
         raise GeometryError("Untrim works on a single face")
     face = faces[0]
-    from OCP.BRep import BRep_Tool
-    from OCP.BRepTools import BRepTools
+    from Core.BRep import BRep_Tool
     surf = BRep_Tool.Surface(face, TopLoc_Location())
     if holes_only:
         outer = breptools.OuterWire(face)
@@ -3317,8 +3342,8 @@ def untrim(shape, holes_only: bool = True) -> TopoDS_Shape:
         if not mk.IsDone():
             raise GeometryError("Untrim failed")
         return mk.Face()
-    from OCP.BRepAdaptor import BRepAdaptor_Surface
-    from OCP.GeomAdaptor import GeomAdaptor_Surface
+    from Core.BRepAdaptor import BRepAdaptor_Surface
+    from Core.GeomAdaptor import GeomAdaptor_Surface
     ga = GeomAdaptor_Surface(surf)
     ba = BRepAdaptor_Surface(face)
 
@@ -3376,7 +3401,7 @@ def _order_loop(curves: list) -> list:
     return ordered
 def edge_surface(curves: list) -> TopoDS_Shape:
     """Coons-style surface from 2, 3 or 4 connected boundary curves."""
-    from OCP.GeomFill import GeomFill_BSplineCurves, GeomFill_FillingStyle
+    from Core.GeomFill import GeomFill_BSplineCurves, GeomFill_FillingStyle
     n = len(curves)
     if n not in (2, 3, 4):
         raise GeometryError("EdgeSrf needs 2, 3 or 4 curves")
@@ -3410,9 +3435,9 @@ def iso_curve(shape, point: Point, along: str = "u") -> TopoDS_Shape:
     if len(faces) != 1:
         raise GeometryError("Pick a single surface")
     face = faces[0]
-    from OCP.BRep import BRep_Tool
-    from OCP.BRepAdaptor import BRepAdaptor_Surface
-    from OCP.ShapeAnalysis import ShapeAnalysis_Surface
+    from Core.BRep import BRep_Tool
+    from Core.BRepAdaptor import BRepAdaptor_Surface
+    from Core.ShapeAnalysis import ShapeAnalysis_Surface
     surf = BRep_Tool.Surface(face, TopLoc_Location())
     uv = ShapeAnalysis_Surface(surf).ValueOfUV(_pnt(point), 1e-6)
     ba = BRepAdaptor_Surface(face)
@@ -3500,8 +3525,8 @@ def smooth_curve(shape, strength: float = 0.2, iterations: int = 5):
     return BRepBuilderAPI_MakeEdge(bs).Edge()
 def _wire_points(shape) -> tuple[list[Point], bool]:
     """Ordered vertex points of a wire of straight segments, plus closed?"""
-    from OCP.BRepTools import BRepTools_WireExplorer
-    from OCP.GeomAbs import GeomAbs_CurveType
+    from Core.BRepTools import breptools as BRepTools_WireExplorer
+    from Core.GeomAbs import GeomAbs_CurveType
     wire = occ.to_wire(shape)
     pts = []
     exp = BRepTools_WireExplorer(wire)
@@ -3557,8 +3582,8 @@ def _set_circular_cap_points(shape, flist, elist, held_f, held_e, target, axes):
     its analytic boundary or the curved walls that meet it. Return None
     when the held parts need the corner-mapping path instead.
     """
-    from OCP.BRepAdaptor import BRepAdaptor_Surface
-    from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
+    from Core.BRepAdaptor import BRepAdaptor_Surface
+    from Core.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 
     if sum(axes) != 1:
         return None
@@ -3626,9 +3651,10 @@ def set_part_points(shape, faces, edges, target: Point,
     or opens a solid is refused before the original shape is replaced.
     """
     import numpy as np
-    from OCP.BRep import BRep_Tool
-    from OCP.BRepTools import BRepTools, BRepTools_WireExplorer
-    from OCP.GeomAbs import GeomAbs_CurveType
+
+    from Core.BRep import BRep_Tool
+    from Core.BRepTools import BRepTools_WireExplorer
+    from Core.GeomAbs import GeomAbs_CurveType
 
     kind = shape_kind(shape)
     if kind not in ("solid", "surface"):
@@ -3645,7 +3671,7 @@ def set_part_points(shape, faces, edges, target: Point,
         raise GeometryError("Nothing held to set")
 
     if kind == "surface" and len(flist) == 1 and held_f == {0}:
-        from OCP.Geom import Geom_BSplineSurface, Geom_BezierSurface
+        from Core.Geom import Geom_BSplineSurface, Geom_BezierSurface
         face = flist[0]
         surface = BRep_Tool.Surface(face, TopLoc_Location())
         if isinstance(surface, (Geom_BSplineSurface, Geom_BezierSurface)):
@@ -3765,7 +3791,7 @@ def project_to_plane(shape, origin: Point, normal: Point):
     return _map_points(shape, _proj, "ProjectToCPlane")
 def chamfer_curves(edge_a, edge_b, d1: float, d2: float | None = None):
     """Chamfer two line/arc edges: returns (trimmed_a, bevel, trimmed_b)."""
-    from OCP.ChFi2d import ChFi2d_ChamferAPI
+    from Core.ChFi2d import ChFi2d_ChamferAPI
     if d1 <= 0:
         raise GeometryError("Chamfer distance must be positive")
     if d2 is None:
@@ -3783,7 +3809,7 @@ def _strip_from_rows(anchor_row, tangent_row, length, v_knots, v_mults,
                      v_degree, weights_row=None):
     """Degree-1-by-N ruled strip from a pole row along unit tangents."""
     import numpy as np
-    from OCP.Geom import Geom_BSplineSurface
+    from Core.Geom import Geom_BSplineSurface
     n = len(anchor_row)
     poles = TColgp_Array1OfPnt(1, 2 * n)
     # build a 2 x n grid: row 1 = anchor, row 2 = anchor + L * unit tangent
@@ -3807,8 +3833,8 @@ def _strip_from_rows(anchor_row, tangent_row, length, v_knots, v_mults,
     for i, (k, m) in enumerate(zip(v_knots, v_mults), start=1):
         vk.SetValue(i, float(k))
         vm.SetValue(i, int(m))
-    from OCP.TColgp import TColgp_Array2OfPnt
-    from OCP.TColStd import TColStd_Array2OfReal
+    from Core.TColgp import TColgp_Array2OfPnt
+    from Core.TColStd import TColStd_Array2OfReal
     poles2 = TColgp_Array2OfPnt(1, 2, 1, n)
     w2 = TColStd_Array2OfReal(1, 2, 1, n)
     for j in range(n):
@@ -3902,8 +3928,9 @@ def extend_surface(shape, edge_index: int, length: float) -> TopoDS_Shape:
 def blend_surfaces(face_a, edge_a, face_b, edge_b) -> TopoDS_Shape:
     """G1 blend surface between two surface edges (straight side rails)."""
     import math
-    from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeFilling
-    from OCP.GeomAbs import GeomAbs_Shape
+
+    from Core.BRepOffsetAPI import BRepOffsetAPI_MakeFilling
+    from Core.GeomAbs import GeomAbs_Shape
     (a0, a1) = curve_endpoints(edge_a)
     (b0, b1) = curve_endpoints(edge_b)
     if (math.dist(a0, b0) + math.dist(a1, b1)

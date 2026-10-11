@@ -14,7 +14,7 @@ from .occ import gp_Ax2, gp_Dir, gp_Pnt
 
 
 def _projector(origin, view_dir, x_dir):
-    from OCP.HLRAlgo import HLRAlgo_Projector
+    from Core.HLRAlgo import HLRAlgo_Projector
     ax2 = gp_Ax2(gp_Pnt(*[float(c) for c in origin]),
                  gp_Dir(*[float(c) for c in view_dir]),
                  gp_Dir(*[float(c) for c in x_dir]))
@@ -36,7 +36,7 @@ def hlr_project(shapes: list, origin, view_dir, x_dir,
     view_dir points from the scene towards the viewer. Output edges lie in
     the projector's XY plane: x along x_dir, y along (view_dir x x_dir).
     """
-    from OCP.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape
+    from Core.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape
 
     algo = HLRBRep_Algo()
     for s in shapes:
@@ -101,7 +101,7 @@ def project_by_shape(shapes: list, origin, view_dir, x_dir,
     via the HLRToShape per-shape overloads — that is what lets each object
     keep its own linetype while still being hidden by objects in front of it.
     """
-    from OCP.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape
+    from Core.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape
 
     def edges_for(method, arg):
         try:
@@ -269,8 +269,9 @@ def _worker_main():
 
     A request per line of stdin, an answer per line of stdout; shapes travel
     as .brep files because they do not fit down a pipe."""
+    from Core.TopoDS import TopoDS_Iterator
+
     from . import geometry
-    from OCP.TopoDS import TopoDS_Iterator
 
     stdin, stdout = _worker_streams()
     for raw in stdin:

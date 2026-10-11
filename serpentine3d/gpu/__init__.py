@@ -5,8 +5,8 @@ package only kicks in when the machine can run it:
 
 - OpenGL 4.3 or newer (the tessellation pipeline; macOS caps at 4.1,
   so Macs stay on the CPU path by a clean capability check);
-- an OCP build that exposes the concrete face TShape
-  (`BRep_Tool.TFace(face)`; on an unpatched OCP build the whole
+- a Core build that exposes the concrete face TShape
+  (`BRep_Tool.TFace(face)`; on an unpatched build the whole
   package is a no-op and behavior is exactly as before).
 
 Flow: a tessellation worker prepares each NURBS face (control net as a
@@ -437,9 +437,9 @@ def _plan(surf, deflection: float, box: tuple[float, float, float, float]) -> tu
 
 def _face_data(shape) -> list:
     """The (face, surface, data) tuples for a shape's NURBS faces.
-    Reads the control net and knots through OCP (the shared lock is
+    Reads the control net and knots through Core (the shared lock is
     held by the caller). Returns [] on any problem (the CPU path runs)."""
-    from OCP.Geom import Geom_BSplineSurface
+    from Core.Geom import Geom_BSplineSurface
 
     from ..core.occ import TopExp_Explorer
     out = []
@@ -467,7 +467,7 @@ def _face_data(shape) -> list:
 
 def _knots(bs) -> dict | None:
     """The control net, knot values+multiplicities, orders and the
-    parameter box for a B-spline surface. Uses the 1-based OCP array
+    parameter box for a B-spline surface. Uses the 1-based Core array
     API (Pole(i, j), array.Lower()/Upper()/Value()/Length()); returns
     None when the accessors are not bound (the CPU path runs)."""
     try:

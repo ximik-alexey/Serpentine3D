@@ -12,8 +12,8 @@ import time
 import traceback
 
 import numpy as np
-from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
-from OCP.TopoDS import TopoDS_Shape
+from Core.BRepBuilderAPI import BRepBuilderAPI_Copy
+from Core.TopoDS import TopoDS_Shape
 
 from .core.deferred import DeferredShape
 from .scripting import Document

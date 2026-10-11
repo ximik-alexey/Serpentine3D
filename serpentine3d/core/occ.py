@@ -1,28 +1,28 @@
 """Kernel binding layer.
 
-Serpentine3D talks to OpenCASCADE through this module only. It currently binds
-via OCP (pip-installable pybind11 wheels); pythonocc-core uses the same class
-names under OCC.Core.*, so porting means editing this file, not the app.
+Serpentine3D talks to OpenCASCADE through this module only. It binds via
+pythonocc-core (the Core package over the local OCCT 8.0.1 build); the class
+names match the OCCT layout, so the rest of the app imports from here.
 """
 
-from OCP.BinTools import bintools as _bintools
-from OCP.Bnd import Bnd_Box
-from OCP.BRep import BRep_Tool
-from OCP.BRepAdaptor import BRepAdaptor_Curve
-from OCP.BRepBndLib import brepbndlib
-from OCP.BRepGProp import brepgprop
-from OCP.BRepLib import breplib
-from OCP.GeomAbs import GeomAbs_Shape
-from OCP.gp import (
+from Core.BinTools import bintools as _bintools
+from Core.Bnd import Bnd_Box
+from Core.BRep import BRep_Tool
+from Core.BRepAdaptor import BRepAdaptor_Curve
+from Core.BRepBndLib import brepbndlib
+from Core.BRepGProp import brepgprop
+from Core.BRepLib import breplib
+from Core.GeomAbs import GeomAbs_Shape
+from Core.gp import (
     gp_Pnt, gp_Vec, gp_Dir, gp_Ax1, gp_Ax2, gp_Ax3, gp_Pln, gp_Trsf,
     gp_GTrsf, gp_Circ, gp_Elips, gp_XYZ, gp_Quaternion, gp_Mat,
     gp_Pnt2d,
 )
-from OCP.GProp import GProp_GProps
-from OCP.TopAbs import TopAbs_ShapeEnum
-from OCP.TopExp import TopExp, TopExp_Explorer
-from OCP.TopLoc import TopLoc_Location
-from OCP.TopoDS import (
+from Core.GProp import GProp_GProps
+from Core.TopAbs import TopAbs_ShapeEnum
+from Core.TopExp import topexp as TopExp, TopExp_Explorer
+from Core.TopLoc import TopLoc_Location
+from Core.TopoDS import (
     TopoDS_Compound,
     TopoDS_Edge,
     TopoDS_Face,
@@ -32,52 +32,140 @@ from OCP.TopoDS import (
     TopoDS_Vertex,
     TopoDS_Wire,
 )
-from OCP.TopTools import (
+from Core.TopTools import (
     TopTools_IndexedMapOfShape,
 )
-from OCP.BRep import BRep_Builder
-from OCP.BRepBuilderAPI import (
+from Core.BRep import BRep_Builder
+from Core.BRepBuilderAPI import (
     BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeFace,
     BRepBuilderAPI_MakeVertex, BRepBuilderAPI_Transform,
     BRepBuilderAPI_GTransform, BRepBuilderAPI_Copy,
     BRepBuilderAPI_Sewing, BRepBuilderAPI_MakeSolid,
 )
-from OCP.BRepPrimAPI import (
+from Core.BRepPrimAPI import (
     BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol, BRepPrimAPI_MakeBox,
     BRepPrimAPI_MakeSphere, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeCone,
     BRepPrimAPI_MakeTorus,
 )
-from OCP.BRepAlgoAPI import (
+from Core.BRepAlgoAPI import (
     BRepAlgoAPI_Fuse, BRepAlgoAPI_Cut, BRepAlgoAPI_Common,
     BRepAlgoAPI_Splitter,
 )
-from OCP.BRepOffsetAPI import (
+from Core.BRepOffsetAPI import (
     BRepOffsetAPI_ThruSections, BRepOffsetAPI_MakePipe,
     BRepOffsetAPI_MakePipeShell, BRepOffsetAPI_MakeOffset,
 )
-from OCP.GC import GC_MakeArcOfCircle, GC_MakeSegment, GC_MakeCircle
-from OCP.GeomAPI import GeomAPI_Interpolate, GeomAPI_PointsToBSpline
-from OCP.Geom import (
+from Core.GC import GC_MakeArcOfCircle, GC_MakeSegment, GC_MakeCircle
+from Core.GeomAPI import GeomAPI_Interpolate, GeomAPI_PointsToBSpline
+from Core.Geom import (
     Geom_BSplineCurve, Geom_Circle, Geom_TrimmedCurve, Geom_Plane,
     Geom_Ellipse, Geom_Line,
 )
-from OCP.TColgp import TColgp_Array1OfPnt, TColgp_HArray1OfPnt
-from OCP.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
-from OCP.BRepCheck import BRepCheck_Analyzer
-from OCP.TopoDS import TopoDS_Iterator
-from OCP.BRepMesh import BRepMesh_IncrementalMesh
-from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet, BRepFilletAPI_MakeChamfer
-from OCP.ChFi2d import ChFi2d_FilletAPI
-from OCP.GeomAbs import GeomAbs_JoinType, GeomAbs_CurveType, GeomAbs_C2
-from OCP.GCPnts import GCPnts_TangentialDeflection, GCPnts_UniformDeflection
-from OCP.GeomConvert import GeomConvert
-from OCP.BRepTools import BRepTools
-from OCP.TopAbs import TopAbs_Orientation, TopAbs_State
-from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
-from OCP.TopTools import TopTools_ListOfShape
-from OCP.BRepBuilderAPI import BRepBuilderAPI_MakePolygon
+from Core.TColgp import TColgp_Array1OfPnt, TColgp_HArray1OfPnt
+from Core.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
+from Core.BRepCheck import BRepCheck_Analyzer
+from Core.TopoDS import TopoDS_Iterator
+from Core.BRepMesh import BRepMesh_IncrementalMesh
+from Core.BRepFilletAPI import BRepFilletAPI_MakeFillet, BRepFilletAPI_MakeChamfer
+from Core.ChFi2d import ChFi2d_FilletAPI
+from Core.GeomAbs import GeomAbs_JoinType, GeomAbs_CurveType, GeomAbs_C2
+from Core.GCPnts import GCPnts_TangentialDeflection, GCPnts_UniformDeflection
+from Core.GeomConvert import geomconvert as GeomConvert
+from Core.BRepTools import breptools as BRepTools
+from Core.TopAbs import TopAbs_Orientation, TopAbs_State
+from Core.ShapeAnalysis import ShapeAnalysis_FreeBounds
+from Core.TopTools import TopTools_ListOfShape
+from Core.BRepBuilderAPI import BRepBuilderAPI_MakePolygon
 
-BACKEND = "OCP"
+BACKEND = "Core"
+
+__all__ = [
+    "BACKEND",
+    "Bnd_Box",
+    "BRep_Tool",
+    "BRep_Builder",
+    "BRepAdaptor_Curve",
+    "brepbndlib",
+    "brepgprop",
+    "breplib",
+    "breptools",
+    "GeomAbs_Shape",
+    "gp_Pnt", "gp_Vec", "gp_Dir", "gp_Ax1", "gp_Ax2", "gp_Ax3", "gp_Pln",
+    "gp_Trsf", "gp_GTrsf", "gp_Circ", "gp_Elips", "gp_XYZ",
+    "gp_Quaternion", "gp_Mat", "gp_Pnt2d",
+    "GProp_GProps",
+    "TopAbs_ShapeEnum",
+    "TopAbs_Orientation",
+    "TopAbs_State",
+    "TopExp",
+    "TopExp_Explorer",
+    "TopLoc_Location",
+    "TopoDS_Compound",
+    "TopoDS_Edge",
+    "TopoDS_Face",
+    "TopoDS_Shape",
+    "TopoDS_Shell",
+    "TopoDS_Solid",
+    "TopoDS_Vertex",
+    "TopoDS_Wire",
+    "TopoDS_Iterator",
+    "TopTools_IndexedMapOfShape",
+    "TopTools_ListOfShape",
+    "BRepBuilderAPI_MakeEdge",
+    "BRepBuilderAPI_MakeWire",
+    "BRepBuilderAPI_MakeFace",
+    "BRepBuilderAPI_MakeVertex",
+    "BRepBuilderAPI_Transform",
+    "BRepBuilderAPI_GTransform",
+    "BRepBuilderAPI_Copy",
+    "BRepBuilderAPI_Sewing",
+    "BRepBuilderAPI_MakeSolid",
+    "BRepBuilderAPI_MakePolygon",
+    "BRepPrimAPI_MakePrism",
+    "BRepPrimAPI_MakeRevol",
+    "BRepPrimAPI_MakeBox",
+    "BRepPrimAPI_MakeSphere",
+    "BRepPrimAPI_MakeCylinder",
+    "BRepPrimAPI_MakeCone",
+    "BRepPrimAPI_MakeTorus",
+    "BRepAlgoAPI_Fuse",
+    "BRepAlgoAPI_Cut",
+    "BRepAlgoAPI_Common",
+    "BRepAlgoAPI_Splitter",
+    "BRepOffsetAPI_ThruSections",
+    "BRepOffsetAPI_MakePipe",
+    "BRepOffsetAPI_MakePipeShell",
+    "BRepOffsetAPI_MakeOffset",
+    "GC_MakeArcOfCircle",
+    "GC_MakeSegment",
+    "GC_MakeCircle",
+    "GeomAPI_Interpolate",
+    "GeomAPI_PointsToBSpline",
+    "Geom_BSplineCurve",
+    "Geom_Circle",
+    "Geom_TrimmedCurve",
+    "Geom_Plane",
+    "Geom_Ellipse",
+    "Geom_Line",
+    "TColgp_Array1OfPnt",
+    "TColgp_HArray1OfPnt",
+    "TColStd_Array1OfReal",
+    "TColStd_Array1OfInteger",
+    "BRepCheck_Analyzer",
+    "BRepMesh_IncrementalMesh",
+    "BRepFilletAPI_MakeFillet",
+    "BRepFilletAPI_MakeChamfer",
+    "ChFi2d_FilletAPI",
+    "GeomAbs_JoinType",
+    "GeomAbs_CurveType",
+    "GeomAbs_C2",
+    "GCPnts_TangentialDeflection",
+    "GCPnts_UniformDeflection",
+    "GeomConvert",
+    "BRepTools",
+    "ShapeAnalysis_FreeBounds",
+]
+
 
 # --- downcasts -------------------------------------------------------------
 
@@ -175,7 +263,7 @@ def without_creases(shape):
         exp.Next()
     if not creased:
         return shape
-    from OCP.ShapeUpgrade import ShapeUpgrade_ShapeDivideContinuity
+    from Core.ShapeUpgrade import ShapeUpgrade_ShapeDivideContinuity
     try:
         split = ShapeUpgrade_ShapeDivideContinuity(shape)
         split.SetBoundaryCriterion(GeomAbs_Shape.GeomAbs_C1)

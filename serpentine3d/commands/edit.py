@@ -418,9 +418,9 @@ def _pieces_to_trim(ctx, target, cutting):
 
 def _piece_nearest(pieces, at) -> int:
     """Which piece the clicked point is on: the one nearest to it."""
-    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
-    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
-    from OCP.gp import gp_Pnt
+    from Core.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+    from Core.BRepExtrema import BRepExtrema_DistShapeShape
+    from Core.gp import gp_Pnt
     here = BRepBuilderAPI_MakeVertex(gp_Pnt(*at)).Vertex()
     best, best_d = 0, float("inf")
     for i, piece in enumerate(pieces):

@@ -61,11 +61,11 @@ def text_curves(text: str, height: float, font_family: str = "sans",
     The first baseline is at the origin, positive Y points up, and subsequent
     lines extend down. ``height`` specifies the font's capital-letter height.
     """
-    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire
-    from OCP.Geom import Geom_BezierCurve
-    from OCP.Precision import Precision
-    from OCP.TColgp import TColgp_Array1OfPnt
-    from OCP.gp import gp_Pnt
+    from Core.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire
+    from Core.Geom import Geom_BezierCurve
+    from Core.Precision import precision as Precision
+    from Core.TColgp import TColgp_Array1OfPnt
+    from Core.gp import gp_Pnt
     from PySide6.QtGui import QPainterPath
     from . import geometry
 

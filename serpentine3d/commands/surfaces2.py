@@ -396,8 +396,9 @@ def cmd_extractisocurve(ctx):
 @command("dupfaceborder")
 def cmd_dupfaceborder(ctx):
     """Duplicate the border wires of Ctrl+Shift-picked faces as curves."""
+    from Core.TopExp import TopExp_Explorer
+
     from ..core import occ
-    from OCP.TopExp import TopExp_Explorer
     picked = []
     for (obj_id, kind, idx) in ctx.selection.subobjects:
         if kind != "face":

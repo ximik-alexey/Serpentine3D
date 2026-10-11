@@ -70,7 +70,7 @@ def _static_snap_points(shape) -> list[tuple[tuple, str]]:
         add(x, y, z, "point")
         return out
 
-    from OCP.GeomAbs import GeomAbs_CurveType
+    from Core.GeomAbs import GeomAbs_CurveType
     for edge in geometry.edges_of(shape):
         try:
             ad = occ.edge_adaptor(edge)
@@ -119,7 +119,7 @@ def _static_snap_points(shape) -> list[tuple[tuple, str]]:
 
 def _intersections(objects) -> list[tuple]:
     """Pairwise curve-curve intersection points (bbox-filtered)."""
-    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+    from Core.BRepExtrema import BRepExtrema_DistShapeShape
     curves = [(o, geometry.bbox(o.shape)) for o in objects
               if o.kind == "curve"]
     pts = []
@@ -539,7 +539,7 @@ class SnapIndex:
         hit = self._perp_cache
         if hit is not None and hit[0] == key:
             return hit[1]
-        from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+        from Core.BRepExtrema import BRepExtrema_DistShapeShape
         from .occ import BRepBuilderAPI_MakeVertex, gp_Pnt
         v = BRepBuilderAPI_MakeVertex(
             gp_Pnt(*[float(c) for c in base_point])).Vertex()

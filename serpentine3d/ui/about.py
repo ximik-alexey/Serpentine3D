@@ -54,14 +54,14 @@ QPushButton:hover {{ background: #34353b; border-color: {theme.ACCENT}; }}
 
 
 def _kernel_version() -> str:
-    """OCCT arrives as a wheel, so its own headers are not around to ask —
-    the wheel's version is the honest answer and the one a bug report can
-    be matched against."""
+    """OCCT is a local build (8.0.1) on this machine; report its pip
+    version when one is installed, the build version otherwise — that is
+    the answer a bug report can be matched against."""
     try:
         from importlib.metadata import version
-        return version("cadquery-ocp")
+        return version("pythonocc-core")
     except Exception:                                      # noqa: BLE001
-        return "unknown"
+        return "8.0.1 (local build)"
 
 
 def build_rows() -> list[tuple[str, str]]:

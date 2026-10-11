@@ -24,7 +24,7 @@ import uuid
 from collections import Counter
 
 import numpy as np
-from OCP.BRepLib import breplib
+from Core.BRepLib import breplib
 
 from ..core import geometry
 from ..utils.units import convert
@@ -235,8 +235,6 @@ class _Found:
         """Each separate body the faces make, a solid where it closes and
         facing out: SketchUp is happy with faces wound either way round,
         and a solid sewn from the wrong way round has a negative volume."""
-        from OCP.BRepLib import BRepLib
-
         from ..core import occ
         faces = [f for f in (_face(loops) for loops in self.faces)
                  if f is not None]
@@ -284,7 +282,7 @@ def _edges_in_faces(defn) -> set:
 def _face(loops):
     """A planar face from its boundary and any holes, or None if the
     boundary is degenerate. SketchUp faces are flat by construction."""
-    from OCP.ShapeFix import ShapeFix_Face
+    from Core.ShapeFix import ShapeFix_Face
 
     from ..core.occ import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon, gp_Pnt
     wires = []

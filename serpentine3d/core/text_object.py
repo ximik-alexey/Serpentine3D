@@ -7,8 +7,8 @@ import math
 import struct
 
 import numpy as np
-from OCP.TopLoc import TopLoc_Location
-from OCP.TopoDS import TopoDS_Compound
+from Core.TopLoc import TopLoc_Location
+from Core.TopoDS import TopoDS_Compound
 
 from . import geometry, occ
 

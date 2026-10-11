@@ -270,10 +270,10 @@ def _hatches_from(entity) -> list:
 def _wire_from_path(path):
     """One ezdxf boundary path as a closed wire of exact edges."""
     from ezdxf.path import Command
-    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire
-    from OCP.Geom import Geom_BezierCurve
-    from OCP.TColgp import TColgp_Array1OfPnt
-    from OCP.gp import gp_Pnt
+    from Core.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire
+    from Core.Geom import Geom_BezierCurve
+    from Core.TColgp import TColgp_Array1OfPnt
+    from Core.gp import gp_Pnt
 
     def bezier(points):
         poles = TColgp_Array1OfPnt(1, len(points))

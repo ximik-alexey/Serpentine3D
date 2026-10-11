@@ -10,12 +10,11 @@ from __future__ import annotations
 import math
 
 import numpy as np
+from Core.GeomConvert import geomconvert
+from Core.TopLoc import TopLoc_Location
 
 from . import geometry, occ
-from OCP.TopLoc import TopLoc_Location
-from OCP.GeomConvert import geomconvert
 from .tolerance import tol
-
 
 # ------------------------------------------------------------ deform fields
 
@@ -207,10 +206,9 @@ def deform_curve(shape, fn) -> object:
 
 def deform_surface(shape, fn) -> object:
     """Deform surface/solid faces through the space function and re-sew."""
-    from .occ import BRepBuilderAPI_MakeFace, BRepBuilderAPI_Sewing
-    from OCP.Geom import Geom_BSplineSurface
-    from OCP.GeomConvert import GeomConvert
-    from .occ import BRep_Tool
+    from Core.Geom import Geom_BSplineSurface
+
+    from .occ import BRep_Tool, BRepBuilderAPI_MakeFace, BRepBuilderAPI_Sewing
     faces = geometry.faces_of(shape)
     if not faces:
         raise geometry.GeometryError("Nothing to deform")
@@ -220,8 +218,8 @@ def deform_surface(shape, fn) -> object:
         if isinstance(surf, Geom_BSplineSurface):
             bs = surf.Copy()
         else:
-            from OCP.BRepAdaptor import BRepAdaptor_Surface
-            from OCP.Geom import Geom_RectangularTrimmedSurface
+            from Core.BRepAdaptor import BRepAdaptor_Surface
+            from Core.Geom import Geom_RectangularTrimmedSurface
             ad = BRepAdaptor_Surface(face)
             trimmed = Geom_RectangularTrimmedSurface(
                 surf, ad.FirstUParameter(), ad.LastUParameter(),

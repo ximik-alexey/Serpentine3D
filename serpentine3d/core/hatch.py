@@ -18,7 +18,7 @@ import math
 import struct
 
 import numpy as np
-from OCP.TopoDS import TopoDS_Compound
+from Core.TopoDS import TopoDS_Compound
 
 from . import geometry, occ
 
@@ -227,10 +227,10 @@ def _frame_for(region, normal, xdir=None) -> np.ndarray:
 
 def _rings(region, frame) -> list:
     """Every loop of the region as a polygon in the frame's (x, y)."""
-    from OCP.BRepAdaptor import BRepAdaptor_Curve
-    from OCP.BRepTools import BRepTools_WireExplorer
-    from OCP.GCPnts import GCPnts_QuasiUniformDeflection
-    from OCP.TopAbs import TopAbs_REVERSED
+    from Core.BRepAdaptor import BRepAdaptor_Curve
+    from Core.BRepTools import BRepTools_WireExplorer
+    from Core.GCPnts import GCPnts_QuasiUniformDeflection
+    from Core.TopAbs import TopAbs_REVERSED
     lo, hi = geometry.bbox(region)
     deflection = max(float(np.linalg.norm(np.subtract(hi, lo))) * 1e-4, 1e-7)
     inv = np.linalg.inv(np.asarray(frame, float))
@@ -290,7 +290,7 @@ def _pattern_segments(region, frame, pattern, angle, spacing) -> list:
 def _assemble(region, pattern, segments):
     """The compound the hatch is: its face for a solid fill, its boundary
     and pattern lines for the rest."""
-    from OCP.BRep import BRep_Builder
+    from Core.BRep import BRep_Builder
     builder = BRep_Builder()
     compound = TopoDS_Compound()
     builder.MakeCompound(compound)

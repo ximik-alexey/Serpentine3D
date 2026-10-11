@@ -12,8 +12,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 
 import numpy as np
-from OCP.gp import gp_Trsf
-from OCP.TopLoc import TopLoc_Location
+from Core.gp import gp_Trsf
+from Core.TopLoc import TopLoc_Location
 
 from . import geometry
 from .deferred import DeferredShape
