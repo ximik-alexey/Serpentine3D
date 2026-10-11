@@ -143,7 +143,7 @@ class ObjectsPanel(QWidget):
     def _color_item(self, item, selected, hl):
         """Recursively color an item and its children."""
         obj_id = item.data(0, Qt.ItemDataRole.UserRole)
-        if obj_id is not None:
+        if obj_id is not None and not isinstance(obj_id, list):
             if obj_id in selected:
                 item.setBackground(0, hl)
                 item.setBackground(1, hl)
