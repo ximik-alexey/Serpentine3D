@@ -89,17 +89,19 @@ class ObjectsPanel(QWidget):
         """Update row backgrounds: selected rows get a highlight."""
         from . import theme
         hl = QColor(theme.ACCENT)
+        selected = (set(self.selection._ids)
+                   if self.selection else set())
         for i in range(self.list.count()):
             item = self.list.item(i)
             obj_id = item.data(Qt.ItemDataRole.UserRole)
             if obj_id is None:
                 continue
-            obj = self.scene.get(obj_id)
-            if obj is None:
-                continue
-            if item.isSelected():
+            if obj_id in selected:
                 item.setBackground(hl)
             else:
+                obj = self.scene.get(obj_id)
+                if obj is None:
+                    continue
                 c = self.scene.color_of(obj)
                 tint = QColor(int(c[0] * 255), int(c[1] * 255),
                              int(c[2] * 255))
@@ -119,22 +121,10 @@ class ObjectsPanel(QWidget):
             self.selection.set(ids)
 
     def _on_scene_select(self):
-        """Scene selection changed: sync list selection in place.
+        """Scene selection changed: update row colors in place.
 
-        Does NOT rebuild (no clear): preserves scroll position and
-        the shift-click anchor.
+        Does NOT touch the list's selection model (clearSelection/
+        setSelected): that triggers Qt's auto-scroll to the selected
+        rows. The list's selection state is set during rebuild().
         """
-        if self.selection is None:
-            return
-        selected = set(self.selection._ids)
-        self._updating = True
-        scroll = self.list.verticalScrollBar().value()
-        self.list.clearSelection()
-        for i in range(self.list.count()):
-            item = self.list.item(i)
-            oid = item.data(Qt.ItemDataRole.UserRole)
-            if oid in selected:
-                item.setSelected(True)
-        QTimer.singleShot(0, lambda: self.list.verticalScrollBar().setValue(scroll))
         self._refresh_colors()
-        self._updating = False
