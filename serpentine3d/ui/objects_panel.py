@@ -40,8 +40,8 @@ class ObjectsPanel(QWidget):
             QTreeWidget.SelectionMode.NoSelection)
         self.tree.setRootIsDecorated(True)
         self.tree.setFocusPolicy(Qt.NoFocus)
-        self._selected_rows: set[int] = set()
-        self._anchor_row = None
+        self._selected_ids: set[str] = set()
+        self._anchor_ids: list[str] = []
         self.tree.viewport().installEventFilter(self)
 
         layout = QVBoxLayout(self)
@@ -167,15 +167,8 @@ class ObjectsPanel(QWidget):
         if self._updating or self.selection is None:
             return
         self._refresh_colors()
-        ids = []
-        for r in self._selected_rows:
-            item = self.tree.topLevelItem(r)
-            if item:
-                d = item.data(0, Qt.ItemDataRole.UserRole)
-                if d is not None and not isinstance(d, list):
-                    ids.append(d)
-        if ids:
-            self.selection.set(ids)
+        if self._selected_ids:
+            self.selection.set(list(self._selected_ids))
 
     def _on_scene_select(self):
         """Scene selection changed: update row colors in place."""
@@ -212,7 +205,7 @@ class ObjectsPanel(QWidget):
         self._updating = False
 
     def eventFilter(self, obj, event):
-        """Handle all selection manually (tree is NoSelection)."""
+        """Handle selection manually; let checkbox clicks through."""
         if obj is not self.tree.viewport():
             return False
         if event.type() != QEvent.Type.MouseButtonPress:
@@ -220,21 +213,58 @@ class ObjectsPanel(QWidget):
         idx = self.tree.indexAt(event.pos())
         if not idx.isValid():
             return False
-        row = idx.row()
+        item = self.tree.itemFromIndex(idx)
+        if item is None:
+            return False
+        # Let checkbox clicks through (left indicator area)
+        col0 = self.tree.columnRect(0)
+        if event.pos().x() < col0.left() + 20:
+            return False
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if data is None:
+            return False
         mods = event.modifiers()
         if mods & Qt.KeyboardModifier.ShiftModifier:
-            if self._anchor_row is not None:
-                lo, hi = (min(self._anchor_row, row),
-                         max(self._anchor_row, row))
-                self._selected_rows |= set(range(lo, hi + 1))
+            if self._anchor_ids:
+                all_ids = self._flat_ids()
+                lo = min(all_ids.index(self._anchor_ids[0]),
+                         all_ids.index(data) if isinstance(data, str)
+                         else 0)
+                hi = max(all_ids.index(self._anchor_ids[0]),
+                         all_ids.index(data) if isinstance(data, str)
+                         else 0)
+                self._selected_ids |= set(all_ids[lo:hi + 1])
         elif mods & Qt.KeyboardModifier.ControlModifier:
-            if row in self._selected_rows:
-                self._selected_rows.discard(row)
-            else:
-                self._selected_rows.add(row)
-            self._anchor_row = row
+            ids = self._ids_from_item(item)
+            for i in ids:
+                if i in self._selected_ids:
+                    self._selected_ids.discard(i)
+                else:
+                    self._selected_ids.add(i)
+            self._anchor_ids = ids
         else:
-            self._selected_rows = {row}
-            self._anchor_row = row
+            self._selected_ids = set(self._ids_from_item(item))
+            self._anchor_ids = self._ids_from_item(item)
         self._on_select()
         return True
+
+    def _ids_from_item(self, item) -> list[str]:
+        """Get object id(s) from an item (single or group)."""
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if isinstance(data, list):
+            return data
+        if data is not None:
+            return [data]
+        return []
+
+    def _flat_ids(self) -> list[str]:
+        """All object ids in visual order (top-level + children)."""
+        out = []
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(data, list):
+                out.extend(data)
+            elif data is not None:
+                out.append(data)
+        return out
