@@ -39,6 +39,7 @@ class ObjectsPanel(QWidget):
         self.tree.setSelectionMode(
             QTreeWidget.SelectionMode.NoSelection)
         self.tree.setRootIsDecorated(True)
+        self.tree.setFocusPolicy(Qt.NoFocus)
         self._selected_rows: set[int] = set()
         self._anchor_row = None
         self.tree.viewport().installEventFilter(self)
