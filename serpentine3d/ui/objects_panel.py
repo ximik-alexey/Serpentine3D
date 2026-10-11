@@ -236,4 +236,4 @@ class ObjectsPanel(QWidget):
             self._selected_rows = {row}
             self._anchor_row = row
         self._on_select()
-        return False
+        return True
