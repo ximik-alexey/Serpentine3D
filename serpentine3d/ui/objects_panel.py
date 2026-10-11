@@ -40,6 +40,7 @@ class ObjectsPanel(QWidget):
             QTreeWidget.SelectionMode.ExtendedSelection)
         self.tree.setRootIsDecorated(True)
         self._saved_scroll = 0
+        self._anchor_row = None
         self.tree.viewport().installEventFilter(self)
 
         layout = QVBoxLayout(self)
@@ -211,11 +212,27 @@ class ObjectsPanel(QWidget):
         self._updating = False
 
     def eventFilter(self, obj, event):
-        """Prevent QTreeWidget from scrolling on click selection."""
-        if obj is self.tree.viewport():
-            t = event.type()
-            if t == QEvent.Type.MouseButtonPress:
-                self._saved_scroll = self.tree.verticalScrollBar().value()
-            elif t == QEvent.Type.MouseButtonRelease:
-                self.tree.verticalScrollBar().setValue(self._saved_scroll)
+        """Block scroll on click; handle shift-click range manually."""
+        if obj is not self.tree.viewport():
+            return False
+        t = event.type()
+        if t == QEvent.Type.MouseButtonPress:
+            self._saved_scroll = self.tree.verticalScrollBar().value()
+            idx = self.tree.indexAt(event.pos())
+            if not idx.isValid():
+                return False
+            row = self.tree.row(idx)
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                # Manual range: select all between anchor and clicked
+                if self._anchor_row is not None:
+                    lo, hi = (min(self._anchor_row, row),
+                             max(self._anchor_row, row))
+                    for r in range(lo, hi + 1):
+                        item = self.tree.topLevelItem(r)
+                        if item:
+                            item.setSelected(True)
+            else:
+                self._anchor_row = row
+        elif t == QEvent.Type.MouseButtonRelease:
+            self.tree.verticalScrollBar().setValue(self._saved_scroll)
         return False
