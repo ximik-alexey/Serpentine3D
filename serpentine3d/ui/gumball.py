@@ -21,6 +21,7 @@ import numpy as np
 from OpenGL import GL
 from PySide6.QtCore import Qt
 
+from Core import BRepLib
 from ..core import geometry as g
 from ..core.scene import _carry_box, location_matrix
 from ..utils.math3d import (
@@ -309,7 +310,7 @@ class Gumball:
             if all(np.linalg.norm(np.cross(p - origin, x)) < 1e-6
                    for p in points):
                 return "line", x
-        surface = occ.BRepLib_FindSurface(shape, -1.0, True, False)
+        surface = BRepLib.BRepLib_FindSurface(shape, -1.0, True, False)
         if surface.Found():
             normal = surface.Surface().Pln().Axis().Direction()
             return "curve", np.asarray(g.pnt_tuple(normal), float)
