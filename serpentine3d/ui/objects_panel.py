@@ -128,11 +128,13 @@ class ObjectsPanel(QWidget):
             return
         selected = set(self.selection._ids)
         self._updating = True
+        scroll = self.list.verticalScrollBar().value()
         self.list.clearSelection()
         for i in range(self.list.count()):
             item = self.list.item(i)
             oid = item.data(Qt.ItemDataRole.UserRole)
             if oid in selected:
                 item.setSelected(True)
+        self.list.verticalScrollBar().setValue(scroll)
         self._refresh_colors()
         self._updating = False
