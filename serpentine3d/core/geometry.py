@@ -472,18 +472,15 @@ def curve_endpoints(shape) -> tuple[Point, Point]:
         p1 = ad.Value(ad.LastParameter())
         return ((p0.X(), p0.Y(), p0.Z()), (p1.X(), p1.Y(), p1.Z()))
     if st == occ.WIRE:
-        from OCP.BRep import BRep_Tool
-        from OCP.TopExp import TopExp
-        from OCP.TopoDS import TopoDS_Vertex
-        from OCP.TopExp import TopExp_Explorer as _TE
-        _exp = _TE(shape, occ.VERTEX)
+        _exp = occ.TopExp_Explorer(shape, occ.VERTEX)
         if not _exp.More():
             raise GeometryError("Empty wire")
         v1 = _exp.Current()
+        v2 = v1
         while _exp.Next():
             v2 = _exp.Current()
-        p0 = BRep_Tool.Pnt(v1)
-        p1 = BRep_Tool.Pnt(v2)
+        p0 = occ.BRep_Tool.Pnt(v1)
+        p1 = occ.BRep_Tool.Pnt(v2)
         return ((p0.X(), p0.Y(), p0.Z()), (p1.X(), p1.Y(), p1.Z()))
     raise GeometryError("Not a curve")
 def close_curve(shape) -> TopoDS_Shape:
