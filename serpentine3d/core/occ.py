@@ -109,7 +109,12 @@ def triangulation(face, loc: TopLoc_Location):
 
 def edge_adaptor(edge) -> BRepAdaptor_Curve:
     """Parametric access to an edge's curve (Value/FirstParameter/LastParameter)."""
-    return BRepAdaptor_Curve(TopoDS_Edge(edge))
+    try:
+        return BRepAdaptor_Curve(edge)
+    except TypeError:
+        # A generic TopoDS_Shape proxy (e.g. from .Located()): the adaptor
+        # needs the edge typed back, so re-type it through the explorer.
+        return BRepAdaptor_Curve(TopExp_Explorer(edge, EDGE).Current())
 
 def point_of_vertex(vertex) -> gp_Pnt:
     return BRep_Tool.Pnt(vertex)

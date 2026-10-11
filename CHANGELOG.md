@@ -33,6 +33,14 @@
   than being projected onto the construction plane at Z=0. Preview and
   committed geometry use the same elevation, including on rotated planes.
 
+- **Wire and edge curves render in the 3D view again (#65).** Porting the
+  kernel binding to pythonocc-core left the edge-curve adaptor on a
+  constructor that no longer takes an edge, so every wire's curves were
+  silently dropped from the display and the gumball's frame lookup raised
+  on each hover. The adaptor now builds straight from the edge, with an
+  untyped-shape fallback, and edge endpoints, snap points and the viewport
+  curves work as before.
+
 ## 0.10.8 (2026-10-05)
 
 ### Added

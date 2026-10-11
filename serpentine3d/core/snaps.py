@@ -73,13 +73,7 @@ def _static_snap_points(shape) -> list[tuple[tuple, str]]:
     from OCP.GeomAbs import GeomAbs_CurveType
     for edge in geometry.edges_of(shape):
         try:
-            try:
-                ad = occ.edge_adaptor(edge)
-            except TypeError:
-                # A located parent hands back base-class shape
-                # wrappers (OCP drops the typed edge in .Located());
-                # the adaptor needs the edge back.
-                ad = occ.edge_adaptor(occ.to_edge(edge))
+            ad = occ.edge_adaptor(edge)
             t0, t1 = ad.FirstParameter(), ad.LastParameter()
             p0, p1 = ad.Value(t0), ad.Value(t1)
             closed = p0.Distance(p1) < 1e-9
