@@ -226,7 +226,7 @@ class ObjectsPanel(QWidget):
             if self._anchor_row is not None:
                 lo, hi = (min(self._anchor_row, row),
                          max(self._anchor_row, row))
-                self._selected_rows = set(range(lo, hi + 1))
+                self._selected_rows |= set(range(lo, hi + 1))
         elif mods & Qt.KeyboardModifier.ControlModifier:
             if row in self._selected_rows:
                 self._selected_rows.discard(row)
