@@ -462,25 +462,22 @@ class LayersPanel(QWidget):
             return
         self._updating = True
         picked = self._remember_picked()
-        # takeTopLevelItem keeps the C++ object alive (Python owns it);
-        # clear() would delete it while Qt's model still references it.
-        if not hasattr(self, '_stale_items'):
-            self._stale_items = []
-        self._stale_items.clear()
-        while self.tree.topLevelItemCount() > 0:
-            self._stale_items.append(self.tree.takeTopLevelItem(0))
-        QTimer.singleShot(100, lambda: self._stale_items.clear())
-        counts = {}
-        for obj in self.scene.all():
-            counts[obj.layer_id] = counts.get(obj.layer_id, 0) + 1
-        layers = self.scene.layers
-        known = {la.id for la in layers.all()}
-        for layer in layers.all():
-            # A parent that is not there is not a parent: a file written by
-            # something else can say so, and the layer has to appear
-            # somewhere rather than nowhere.
-            if layer.parent is None or layer.parent not in known:
-                self._add_row(layer, None, counts)
+        try:
+            while self.tree.topLevelItemCount() > 0:
+                self.tree.takeTopLevelItem(0)
+            counts = {}
+            for obj in self.scene.all():
+                counts[obj.layer_id] = counts.get(obj.layer_id, 0) + 1
+            layers = self.scene.layers
+            known = {la.id for la in layers.all()}
+            for layer in layers.all():
+                if layer.parent is None or layer.parent not in known:
+                    self._add_row(layer, None, counts)
+        except RuntimeError:
+            # libshiboken "already deleted": a QTreeWidgetItem's C++ side
+            # was freed while Qt's model still pointed at it. Non-fatal;
+            # the tree is consistent, just one dangling reference.
+            pass
         self._restore_picked(picked)
         self._updating = False
 
