@@ -23,13 +23,29 @@ def _kind_label(kind: str) -> str:
     return {"pointcloud": "Point cloud"}.get(kind, kind.capitalize())
 
 
+class _ObjectTree(QTreeWidget):
+    """A QTreeWidget preconfigured for the objects list."""
+
+    def __init__(self):
+        super().__init__()
+        self.setColumnCount(3)
+        self.setHeaderLabels(["Name", "Kind", ""])
+        self.setRootIsDecorated(False)
+        self.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.header().setStretchLastSection(False)
+        self.header().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch)
+
+
 class ObjectsPanel(QWidget):
     """A paginated tree of all scene objects: name, kind, visibility.
 
     Bidirectional selection: picking a row selects it in the viewport;
     selecting in the viewport jumps to the right page and highlights.
-    Rapid notifications are coalesced into one rebuild via a zero-timer,
-    so opening a 94-part file costs one redraw, not 94.
+    Rebuild swaps in a fresh QTreeWidget (the old one is kept alive
+    until the next rebuild so Qt can finish its internal work on it).
+    Rapid scene notifications are coalesced via a zero-timer.
     """
 
     def __init__(self, scene, selection=None, parent=None):
@@ -38,16 +54,9 @@ class ObjectsPanel(QWidget):
         self.selection = selection
         self._page = 0
         self._updating = False
+        self._old_tree = None
 
-        self.tree = QTreeWidget()
-        self.tree.setColumnCount(3)
-        self.tree.setHeaderLabels(["Name", "Kind", ""])
-        self.tree.setRootIsDecorated(False)
-        self.tree.setSelectionMode(
-            QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.tree.header().setStretchLastSection(False)
-        self.tree.header().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch)
+        self.tree = _ObjectTree()
 
         # Pagination controls
         self._prev_btn = QPushButton("‹")
@@ -68,24 +77,27 @@ class ObjectsPanel(QWidget):
         row.addWidget(self._next_btn)
         layout.addLayout(row)
 
-        self.tree.itemSelectionChanged.connect(self._on_panel_select)
+        self._wire_tree(self.tree)
 
         # Debounce: coalesce N rapid scene notifications into 1 rebuild.
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(0)
         self._timer.timeout.connect(self.rebuild)
-        self._dirty = False
         scene.add_listener(self._on_notify, kinds=("objects",))
         if selection is not None:
             selection.add_listener(self._on_scene_select)
         self.rebuild()
 
+    def _wire_tree(self, tree: QTreeWidget):
+        """Connect the selection signal on a tree instance."""
+        tree.itemSelectionChanged.connect(
+            lambda: self._on_panel_select(tree))
+
     # -- debounced notification -------------------------------------------
 
     def _on_notify(self):
         """Scene changed: schedule a rebuild on the next event loop tick."""
-        self._dirty = True
         if not self._timer.isActive():
             self._timer.start()
 
@@ -115,13 +127,14 @@ class ObjectsPanel(QWidget):
     # -- population ---------------------------------------------------------
 
     def rebuild(self):
-        """Redraw the tree from the scene, showing the current page."""
+        """Swap in a fresh tree populated with the current page."""
         self._updating = True
-        self.tree.setUpdatesEnabled(False)
-        self.tree.blockSignals(True)
-        while self.tree.topLevelItemCount() > 0:
-            self.tree.takeTopLevelItem(0)
 
+        # The previous tree (with all its items) stays alive here until
+        # the NEXT rebuild, giving Qt time to finish paint/selection work.
+        self._old_tree = self.tree
+
+        tree = _ObjectTree()
         objs = self.scene.all()
         page = self._page
         lo = page * _ITEMS_PER_PAGE
@@ -141,26 +154,32 @@ class ObjectsPanel(QWidget):
             item.setBackground(0, tint)
             if obj.id in selected_ids:
                 item.setSelected(True)
-            self.tree.addTopLevelItem(item)
+            tree.addTopLevelItem(item)
 
         label = QTreeWidgetItem(
             ["", "", f"{page + 1} / {self._total_pages()}"])
         label.setFlags(Qt.ItemFlag.NoItemFlags)
-        self.tree.addTopLevelItem(label)
+        tree.addTopLevelItem(label)
+
+        # Swap into the layout
+        layout = self.layout()
+        layout.replaceWidget(self.tree, tree)
+        self.tree = tree
+        self._wire_tree(tree)
+
         self._prev_btn.setEnabled(page > 0)
         self._next_btn.setEnabled(page < self._total_pages() - 1)
-
-        self.tree.blockSignals(False)
-        self.tree.setUpdatesEnabled(True)
         self._updating = False
 
     # -- selection ----------------------------------------------------------
 
-    def _on_panel_select(self):
+    def _on_panel_select(self, tree: QTreeWidget):
         """User picked rows in the panel: select them in the scene."""
         if self._updating or self.selection is None:
             return
-        items = self.tree.selectedItems()
+        if tree is not self.tree:
+            return  # stale signal from the old tree
+        items = tree.selectedItems()
         ids = [it.data(0, Qt.ItemDataRole.UserRole)
                for it in items
                if it.data(0, Qt.ItemDataRole.UserRole)]
