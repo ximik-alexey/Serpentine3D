@@ -102,7 +102,8 @@ class ObjectsPanel(QWidget):
             self.tree.addTopLevelItem(parent)
             parent.setExpanded(True)
 
-        self.tree.verticalScrollBar().setValue(scroll)
+        QTimer.singleShot(
+            0, lambda: self.tree.verticalScrollBar().setValue(scroll))
         self._updating = False
 
     def _make_item(self, obj, selected_ids, hl):
