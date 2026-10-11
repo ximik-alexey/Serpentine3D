@@ -462,24 +462,54 @@ class LayersPanel(QWidget):
             return
         self._updating = True
         picked = self._remember_picked()
-        try:
-            while self.tree.topLevelItemCount() > 0:
-                self.tree.takeTopLevelItem(0)
-            counts = {}
-            for obj in self.scene.all():
-                counts[obj.layer_id] = counts.get(obj.layer_id, 0) + 1
-            layers = self.scene.layers
-            known = {la.id for la in layers.all()}
-            for layer in layers.all():
-                if layer.parent is None or layer.parent not in known:
-                    self._add_row(layer, None, counts)
-        except RuntimeError:
-            # libshiboken "already deleted": a QTreeWidgetItem's C++ side
-            # was freed while Qt's model still pointed at it. Non-fatal;
-            # the tree is consistent, just one dangling reference.
-            pass
+        counts = {}
+        for obj in self.scene.all():
+            counts[obj.layer_id] = counts.get(obj.layer_id, 0) + 1
+        layers = self.scene.layers
+        known = {la.id for la in layers.all()}
+        existing = self._all_rows()
+        current_ids = set()
+        for layer in layers.all():
+            current_ids.add(layer.id)
+            if layer.parent is None or layer.parent not in known:
+                self._update_or_add(layer, None, counts, existing)
+        # Hide items for layers that no longer exist (don't delete:
+        # deleting QTreeWidgetItem triggers shiboken 'already deleted')
+        for lid, item in existing.items():
+            if lid not in current_ids:
+                item.setHidden(True)
         self._restore_picked(picked)
         self._updating = False
+
+    def _update_or_add(self, layer, parent_item, counts, existing):
+        """Update an existing row in place, or add a new one."""
+        item = existing.get(layer.id)
+        if item is not None:
+            item.setHidden(False)
+            self._fill_row(item, layer, counts)
+            for child in self.scene.layers.children(layer.id):
+                self._update_or_add(child, item, counts, existing)
+            return
+        self._add_row(layer, parent_item, counts)
+    def _fill_row(self, item, layer, counts):
+        """Update an existing row's cells in place (no new item)."""
+        n = counts.get(layer.id, 0)
+        label = f"{layer.name}" + (f"  ({n})" if n else "")
+        if layer.id == self.scene.layers.current_id:
+            label = "● " + label
+        print_text = ("Default" if layer.print_width == 0
+                      else f"{layer.print_width:g}")
+        item.setText(_NAME_COL, label)
+        item.setText(_TYPE_COL, layer.linetype)
+        item.setText(_PRINT_COL, print_text)
+        item.setCheckState(
+            _VISIBLE_COL, Qt.CheckState.Checked if layer.visible
+            else Qt.CheckState.Unchecked)
+        if not self.scene.layers.is_visible(layer.id):
+            item.setForeground(_NAME_COL, QColor(theme.TEXT_MUTED))
+        color = QColor.fromRgbF(*layer.color)
+        item.setBackground(_COLOR_COL, color)
+
 
     def _add_row(self, layer, parent_item, counts):
         """One layer's row, and every row of the branch under it."""
