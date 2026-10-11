@@ -101,6 +101,7 @@ class ObjectsPanel(QWidget):
         """Redraw the tree from the scene, showing the current page."""
         self._updating = True
         self.tree.setUpdatesEnabled(False)
+        self.tree.blockSignals(True)
         self.tree.clear()
 
         objs = self.scene.all()
@@ -132,6 +133,7 @@ class ObjectsPanel(QWidget):
         self._prev_btn.setEnabled(page > 0)
         self._next_btn.setEnabled(page < self._total_pages() - 1)
 
+        self.tree.blockSignals(False)
         self.tree.setUpdatesEnabled(True)
         self._updating = False
 
