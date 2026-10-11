@@ -312,7 +312,7 @@ class Gumball:
                 return "line", x
         surface = BRepLib.BRepLib_FindSurface(shape, -1.0, True, False)
         if surface.Found():
-            normal = occ.Geom_Plane(surface.Surface()).Axis().Direction()
+            normal = occ.Geom_Plane.DownCast(surface.Surface()).Axis().Direction()
             return "curve", np.asarray(g.pnt_tuple(normal), float)
         return None
 
