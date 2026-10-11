@@ -171,7 +171,11 @@ class ObjectsPanel(QWidget):
             self.selection.set(list(self._selected_ids))
 
     def _on_scene_select(self):
-        """Scene selection changed: update row colors in place."""
+        """Scene selection changed: sync the manual selection and row
+        colors in place. Covers external changes (Ctrl+A, viewport
+        picking), so a checkbox click sees the real selection."""
+        if self.selection is not None:
+            self._selected_ids = set(self.selection._ids)
         self._refresh_colors()
 
     def _on_item_changed(self, item, column):
