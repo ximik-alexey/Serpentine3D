@@ -427,9 +427,18 @@ class LayersPanel(QWidget):
         layout.addWidget(self.tree, 1)
         layout.addLayout(btns)
 
-        scene.add_listener(self.rebuild, kinds=("objects", "layers"))
+        scene.add_listener(self._schedule_rebuild, kinds=("objects", "layers"))
         self.rebuild()
         self.tree.size_columns()
+
+    def _schedule_rebuild(self):
+        """Coalesce rapid notifications into one rebuild."""
+        if not hasattr(self, '_rb_timer'):
+            self._rb_timer = QTimer(self)
+            self._rb_timer.setSingleShot(True)
+            self._rb_timer.setInterval(0)
+            self._rb_timer.timeout.connect(self.rebuild)
+        self._rb_timer.start()
 
     def width_short_by(self) -> int:
         """How many pixels the panel is short of showing every column.
