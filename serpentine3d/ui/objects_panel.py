@@ -217,8 +217,7 @@ class ObjectsPanel(QWidget):
         if item is None:
             return False
         # Let checkbox clicks through (left indicator area)
-        col0 = self.tree.columnRect(0)
-        if event.pos().x() < col0.left() + 20:
+        if event.pos().x() < 25:
             return False
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if data is None:
