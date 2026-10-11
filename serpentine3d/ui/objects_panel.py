@@ -5,12 +5,10 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QHBoxLayout,
-    QHeaderView,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
-    QTreeWidget,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -23,28 +21,13 @@ def _kind_label(kind: str) -> str:
     return {"pointcloud": "Point cloud"}.get(kind, kind.capitalize())
 
 
-class _ObjectTree(QTreeWidget):
-    """A QTreeWidget preconfigured for the objects list."""
-
-    def __init__(self):
-        super().__init__()
-        self.setColumnCount(3)
-        self.setHeaderLabels(["Name", "Kind", ""])
-        self.setRootIsDecorated(False)
-        self.setSelectionMode(
-            QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.header().setStretchLastSection(False)
-        self.header().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch)
-
-
 class ObjectsPanel(QWidget):
-    """A paginated tree of all scene objects: name, kind, visibility.
+    """A paginated list of all scene objects: name, kind, visibility.
 
     Bidirectional selection: picking a row selects it in the viewport;
     selecting in the viewport jumps to the right page and highlights.
-    Rebuild swaps in a fresh QTreeWidget (the old one is kept alive
-    until the next rebuild so Qt can finish its internal work on it).
+    Uses QListWidget (not QTreeWidget) to avoid shiboken's
+    'already deleted' crash on QTreeWidgetItem.
     Rapid scene notifications are coalesced via a zero-timer.
     """
 
@@ -54,9 +37,10 @@ class ObjectsPanel(QWidget):
         self.selection = selection
         self._page = 0
         self._updating = False
-        self._old_tree = None
 
-        self.tree = _ObjectTree()
+        self.list = QListWidget()
+        self.list.setSelectionMode(
+            QListWidget.SelectionMode.ExtendedSelection)
 
         # Pagination controls
         self._prev_btn = QPushButton("‹")
@@ -69,7 +53,7 @@ class ObjectsPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
-        layout.addWidget(self.tree)
+        layout.addWidget(self.list)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(self._prev_btn)
@@ -77,29 +61,29 @@ class ObjectsPanel(QWidget):
         row.addWidget(self._next_btn)
         layout.addLayout(row)
 
-        self._wire_tree(self.tree)
-
-        # Debounce: coalesce N rapid scene notifications into 1 rebuild.
-        self._timer = QTimer(self)
-        self._timer.setSingleShot(True)
-        self._timer.setInterval(0)
-        self._timer.timeout.connect(self.rebuild)
+        self.list.itemSelectionChanged.connect(self._on_select)
         scene.add_listener(self._on_notify, kinds=("objects",))
         if selection is not None:
             selection.add_listener(self._on_scene_select)
         self.rebuild()
 
-    def _wire_tree(self, tree: QTreeWidget):
-        """Connect the selection signal on a tree instance."""
-        tree.itemSelectionChanged.connect(
-            lambda: self._on_panel_select(tree))
-
     # -- debounced notification -------------------------------------------
 
     def _on_notify(self):
         """Scene changed: schedule a rebuild on the next event loop tick."""
-        if not self._timer.isActive():
-            self._timer.start()
+        if not self._timer_active():
+            self._schedule_rebuild()
+
+    def _timer_active(self) -> bool:
+        return self._timer.isActive() if hasattr(self, '_timer') else False
+
+    def _schedule_rebuild(self):
+        if not hasattr(self, '_timer'):
+            self._timer = QTimer(self)
+            self._timer.setSingleShot(True)
+            self._timer.setInterval(0)
+            self._timer.timeout.connect(self.rebuild)
+        self._timer.start()
 
     # -- pagination ---------------------------------------------------------
 
@@ -127,45 +111,35 @@ class ObjectsPanel(QWidget):
     # -- population ---------------------------------------------------------
 
     def rebuild(self):
-        """Swap in a fresh tree populated with the current page."""
+        """Redraw the list from the scene, showing the current page."""
         self._updating = True
+        self.list.clear()
 
-        # The previous tree (with all its items) stays alive here until
-        # the NEXT rebuild, giving Qt time to finish paint/selection work.
-        self._old_tree = self.tree
-
-        tree = _ObjectTree()
         objs = self.scene.all()
         page = self._page
         lo = page * _ITEMS_PER_PAGE
         hi = lo + _ITEMS_PER_PAGE
-        selected_ids = (set(self.selection._ids) if self.selection else set())
+        selected_ids = (set(self.selection._ids)
+                       if self.selection else set())
         for obj in objs[lo:hi]:
-            item = QTreeWidgetItem([
-                obj.name,
-                _kind_label(obj.kind),
-                "✓" if obj.visible else "",
-            ])
-            item.setData(0, Qt.ItemDataRole.UserRole, obj.id)
+            vis = "✓ " if obj.visible else "  "
+            text = f"{vis}{obj.name}  [{_kind_label(obj.kind)}]"
+            item = QListWidgetItem(text)
+            item.setData(Qt.ItemDataRole.UserRole, obj.id)
             c = self.scene.color_of(obj)
             tint = QColor(int(c[0] * 255), int(c[1] * 255),
                           int(c[2] * 255))
-            tint.setAlpha(60)
-            item.setBackground(0, tint)
+            tint.setAlpha(40)
+            item.setBackground(tint)
             if obj.id in selected_ids:
                 item.setSelected(True)
-            tree.addTopLevelItem(item)
+            self.list.addItem(item)
 
-        label = QTreeWidgetItem(
-            ["", "", f"{page + 1} / {self._total_pages()}"])
+        # page indicator
+        label = QListWidgetItem(
+            f"  — page {page + 1} / {self._total_pages()} —")
         label.setFlags(Qt.ItemFlag.NoItemFlags)
-        tree.addTopLevelItem(label)
-
-        # Swap into the layout
-        layout = self.layout()
-        layout.replaceWidget(self.tree, tree)
-        self.tree = tree
-        self._wire_tree(tree)
+        self.list.addItem(label)
 
         self._prev_btn.setEnabled(page > 0)
         self._next_btn.setEnabled(page < self._total_pages() - 1)
@@ -173,16 +147,14 @@ class ObjectsPanel(QWidget):
 
     # -- selection ----------------------------------------------------------
 
-    def _on_panel_select(self, tree: QTreeWidget):
-        """User picked rows in the panel: select them in the scene."""
+    def _on_select(self):
+        """User picked rows in the list: select them in the scene."""
         if self._updating or self.selection is None:
             return
-        if tree is not self.tree:
-            return  # stale signal from the old tree
-        items = tree.selectedItems()
-        ids = [it.data(0, Qt.ItemDataRole.UserRole)
+        items = self.list.selectedItems()
+        ids = [it.data(Qt.ItemDataRole.UserRole)
                for it in items
-               if it.data(0, Qt.ItemDataRole.UserRole)]
+               if it.data(Qt.ItemDataRole.UserRole)]
         if ids:
             self.selection.set(ids)
 
