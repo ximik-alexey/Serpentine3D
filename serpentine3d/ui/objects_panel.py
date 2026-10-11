@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QTreeWidget,
@@ -39,6 +39,8 @@ class ObjectsPanel(QWidget):
         self.tree.setSelectionMode(
             QTreeWidget.SelectionMode.ExtendedSelection)
         self.tree.setRootIsDecorated(True)
+        self._saved_scroll = 0
+        self.tree.viewport().installEventFilter(self)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -207,3 +209,13 @@ class ObjectsPanel(QWidget):
             else:
                 self.scene.update(data, visible=visible)
         self._updating = False
+
+    def eventFilter(self, obj, event):
+        """Prevent QTreeWidget from scrolling on click selection."""
+        if obj is self.tree.viewport():
+            t = event.type()
+            if t == QEvent.Type.MouseButtonPress:
+                self._saved_scroll = self.tree.verticalScrollBar().value()
+            elif t == QEvent.Type.MouseButtonRelease:
+                self.tree.verticalScrollBar().setValue(self._saved_scroll)
+        return False
