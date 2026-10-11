@@ -37,9 +37,9 @@ class ObjectsPanel(QWidget):
         self.tree.setColumnCount(2)
         self.tree.setHeaderLabels(["Object", "Type"])
         self.tree.setSelectionMode(
-            QTreeWidget.SelectionMode.ExtendedSelection)
+            QTreeWidget.SelectionMode.NoSelection)
         self.tree.setRootIsDecorated(True)
-        self._saved_scroll = 0
+        self._selected_rows: set[int] = set()
         self._anchor_row = None
         self.tree.viewport().installEventFilter(self)
 
@@ -47,7 +47,6 @@ class ObjectsPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.tree)
 
-        self.tree.itemSelectionChanged.connect(self._on_select)
         self.tree.itemChanged.connect(self._on_item_changed)
         scene.add_listener(self._on_notify, kinds=("objects",))
         if selection is not None:
@@ -163,19 +162,19 @@ class ObjectsPanel(QWidget):
             self._color_item(item.child(i), selected, hl)
 
     def _on_select(self):
-        """User picked rows in the tree: select them in the scene."""
+        """Manual selection changed: push to scene."""
         if self._updating or self.selection is None:
             return
-        scroll = self.tree.verticalScrollBar().value()
         self._refresh_colors()
-        items = self.tree.selectedItems()
-        ids = [it.data(0, Qt.ItemDataRole.UserRole)
-               for it in items
-               if it.data(0, Qt.ItemDataRole.UserRole)]
+        ids = []
+        for r in self._selected_rows:
+            item = self.tree.topLevelItem(r)
+            if item:
+                d = item.data(0, Qt.ItemDataRole.UserRole)
+                if d is not None and not isinstance(d, list):
+                    ids.append(d)
         if ids:
             self.selection.set(ids)
-        QTimer.singleShot(
-            0, lambda: self.tree.verticalScrollBar().setValue(scroll))
 
     def _on_scene_select(self):
         """Scene selection changed: update row colors in place."""
@@ -212,31 +211,28 @@ class ObjectsPanel(QWidget):
         self._updating = False
 
     def eventFilter(self, obj, event):
-        """Block scroll on click; handle shift-click range manually."""
+        """Handle all selection manually (tree is NoSelection)."""
         if obj is not self.tree.viewport():
             return False
-        t = event.type()
-        if t == QEvent.Type.MouseButtonPress:
-            self._saved_scroll = self.tree.verticalScrollBar().value()
-            sb = self.tree.verticalScrollBar()
-            sb.blockSignals(True)
-            idx = self.tree.indexAt(event.pos())
-            if not idx.isValid():
-                sb.blockSignals(False)
-                return False
-            row = idx.row()
-            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                if self._anchor_row is not None:
-                    lo, hi = (min(self._anchor_row, row),
-                             max(self._anchor_row, row))
-                    for r in range(lo, hi + 1):
-                        item = self.tree.topLevelItem(r)
-                        if item:
-                            item.setSelected(True)
+        if event.type() != QEvent.Type.MouseButtonPress:
+            return False
+        idx = self.tree.indexAt(event.pos())
+        if not idx.isValid():
+            return False
+        row = idx.row()
+        mods = event.modifiers()
+        if mods & Qt.KeyboardModifier.ShiftModifier:
+            if self._anchor_row is not None:
+                lo, hi = (min(self._anchor_row, row),
+                         max(self._anchor_row, row))
+                self._selected_rows = set(range(lo, hi + 1))
+        elif mods & Qt.KeyboardModifier.ControlModifier:
+            if row in self._selected_rows:
+                self._selected_rows.discard(row)
             else:
-                self._anchor_row = row
-        elif t == QEvent.Type.MouseButtonRelease:
-            sb = self.tree.verticalScrollBar()
-            sb.blockSignals(False)
-            sb.setValue(self._saved_scroll)
+                self._selected_rows.add(row)
+        else:
+            self._selected_rows = {row}
+            self._anchor_row = row
+        self._on_select()
         return False
