@@ -42,9 +42,5 @@ no API key, $0).
 
 ## AppImage handoff
 
-After every user-facing application change, run
-`rtk packaging/appimage/build-appimage.sh` before handing the work back. The
-script refreshes `/home/chisomo-banzi/Applications/Serpentine3D.AppImage`, which
-is the build launched by the pinned `serpentine3d.desktop` dock entry. Verify
-the installed AppImage starts and contains the current change. Skip this only
-when the user explicitly opts out.
+NEVER build the AppImage. Do not run `packaging/appimage/build-appimage.sh`.
+The user has explicitly opted out permanently.

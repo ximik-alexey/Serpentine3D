@@ -1,5 +1,11 @@
 # Changelog
 
+> **Note:** STEP/IGES import/export currently use a C++ ctypes wrapper
+> (`fileio/_step_iges.cpp`) because pythonocc-core's SWIG DataExchange
+> modules segfault on load (upstream bug #1428). This is a temporary
+> workaround — replace with native `STEPControl_Reader` / `IGESControl_Reader`
+> once pythonocc-core ships working DataExchange bindings.
+
 ## 0.10.9 (2026-10-07)
 
 ### Added
