@@ -10,8 +10,8 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#include <memory>
 #include <cmath>
-#include <fstream>
 
 #include "STEPControl_Reader.hxx"
 #include "IGESControl_Reader.hxx"
@@ -23,16 +23,11 @@
 #include "BRep_Tool.hxx"
 #include "TopLoc_Location.hxx"
 #include "Poly_Triangulation.hxx"
-#include "gp_Ax2.hxx"
 #include "gp_Pnt.hxx"
-#include "gp_Dir.hxx"
-#include "gp_XYZ.hxx"
-#include "gp_Mat.hxx"
-#include "gp_Quaternion.hxx"
 #include "gp_Trsf.hxx"
-// 8.0.1 STEP item model (the rep items no longer carry the shape; the
-// BREP items are reached through the file text: entity label → entry →
-// referenced #ids → entity)
+// 8.0.1 STEP item model: representation items carry the label of
+// the referenced entity; placement comes from the relationship's
+// TransformationOperator (Geom_Transformation entity in the model).
 #include "StepData_StepModel.hxx"
 #include "StepRepr_Representation.hxx"
 #include "StepRepr_NextAssemblyUsageOccurrence.hxx"
@@ -41,18 +36,10 @@
 #include "StepBasic_Product.hxx"
 #include "StepRepr_RepresentationRelationshipWithTransformation.hxx"
 #include "StepRepr_ItemDefinedTransformation.hxx"
-#include "StepGeom_Axis2Placement3d.hxx"
-#include "StepGeom_CartesianPoint.hxx"
-#include "StepGeom_Direction.hxx"
+#include "Geom_Transformation.hxx"
+#include "StepRepr_Transformation.hxx"
 #include "StepShape_ShapeDefinitionRepresentation.hxx"
 #include "StepRepr_PropertyDefinition.hxx"
-#include "StepShape_BrepWithVoids.hxx"
-#include "StepShape_ManifoldSolidBrep.hxx"
-#include "StepShape_FacetedBrep.hxx"
-#include "StepToTopoDS_Builder.hxx"
-#include "Transfer_TransientProcess.hxx"
-#include "BRepBndLib.hxx"
-#include "Bnd_Box.hxx"
 
 // Multi-mesh file format:
 //   [4B: n_meshes]
@@ -62,7 +49,7 @@
 struct Part {
     std::string name;
     std::string parent;
-    double c[3]; // world-space bbox center
+    double c[3]; // placement anchor (world-space)
 };
 
 static std::string pdef_product(const Handle(StepBasic_ProductDefinition)& pd) {
@@ -82,69 +69,26 @@ static Handle(Standard_Transient) find_by_label(
     return nullptr;
 }
 
-// #ids referenced in the raw text entry of `label`
-static std::vector<int> entry_refs(const std::string& text, int label) {
-    std::string pat = "#" + std::to_string(label) + " = ";
-    size_t pos = text.find(pat);
-    if (pos == std::string::npos) return {};
-    size_t end = text.find(";\n#", pos + pat.size());
-    std::string body = text.substr(
-        pos + pat.size(),
-        end == std::string::npos ? 0 : end - pos - pat.size());
-    std::vector<int> out;
-    size_t q;
-    while ((q = body.find("#", 0)) != std::string::npos) {
-        size_t k = q + 1;
-        int v = 0;
-        while (k < body.size() && body[k] >= '0' && body[k] <= '9')
-            v = v * 10 + (body[k++] - '0');
-        if (v > 0) out.push_back(v);
-        q = k;
-    }
-    return out;
+// world-space bbox center of the placed part geometry. Built from
+// the model's own entity graph (representation items), no raw
+// text parsing.
+static int item_id(
+    const Handle(StepRepr_RepresentationItem)& it) {
+    return atoi(it->Name()->ToCString());
 }
-
-// Build the local BREP shape of a geometry item (the reader's own
-// internal conversion, standalone).
-static TopoDS_Shape build_geo(const Handle(Standard_Transient)& e) {
-    Transfer_TransientProcess tp(10000);
-    Handle(Transfer_TransientProcess) th(&tp);
-    if (const auto* g =
-            dynamic_cast<const StepShape_BrepWithVoids*>(e.get())) {
-        StepToTopoDS_Builder b;
-        b.Init(Handle(StepShape_BrepWithVoids)(g), th);
-        return b.Value();
-    }
-    if (const auto* g =
-            dynamic_cast<const StepShape_ManifoldSolidBrep*>(e.get())) {
-        StepToTopoDS_Builder b;
-        b.Init(Handle(StepShape_ManifoldSolidBrep)(g), th);
-        return b.Value();
-    }
-    if (const auto* g =
-            dynamic_cast<const StepShape_FacetedBrep*>(e.get())) {
-        StepToTopoDS_Builder b;
-        b.Init(Handle(StepShape_FacetedBrep)(g), th);
-        return b.Value();
-    }
-    return TopoDS_Shape();
-}
-
-// Part table of a STEP file: product name, parent product name,
-// world-space bbox center of the placed part geometry.
 static std::vector<Part> step_parts(
-    const std::string& text, const Handle(StepData_StepModel)& m) {
+    const Handle(StepData_StepModel)& m) {
     std::vector<Part> parts;
     if (m.IsNull()) return parts;
 
     std::vector<std::pair<std::string, std::string>> edges;
     for (int i = 1; i <= m->NbEntities(); ++i) {
         Handle(Standard_Transient) e = m->Entity(i);
-        const auto* nao_p =
-            dynamic_cast<const StepRepr_NextAssemblyUsageOccurrence*>(
-                e.get());
-        if (!nao_p) continue;
-        Handle(StepRepr_NextAssemblyUsageOccurrence) nao(nao_p);
+        if (!e->IsKind(
+                StepRepr_NextAssemblyUsageOccurrence::get_type_descriptor()))
+            continue;
+        Handle(StepRepr_NextAssemblyUsageOccurrence) nao(
+            reinterpret_cast<const StepRepr_NextAssemblyUsageOccurrence*>(e.get()));
         std::string pa =
             pdef_product(nao->RelatingProductDefinition());
         std::string pc =
@@ -155,11 +99,11 @@ static std::vector<Part> step_parts(
 
     for (int i = 1; i <= m->NbEntities(); ++i) {
         Handle(Standard_Transient) e = m->Entity(i);
-        const auto* sdr_p =
-            dynamic_cast<const StepShape_ShapeDefinitionRepresentation*>(
-                e.get());
-        if (!sdr_p) continue;
-        Handle(StepShape_ShapeDefinitionRepresentation) sdr(sdr_p);
+        if (!e->IsKind(
+                StepShape_ShapeDefinitionRepresentation::get_type_descriptor()))
+            continue;
+        Handle(StepShape_ShapeDefinitionRepresentation) sdr(
+            reinterpret_cast<const StepShape_ShapeDefinitionRepresentation*>(e.get()));
         std::string prod = pdef_product(
             sdr->Definition().PropertyDefinition()
                 ->Definition().ProductDefinition());
@@ -167,109 +111,55 @@ static std::vector<Part> step_parts(
         Handle(StepRepr_Representation) rep = sdr->UsedRepresentation();
         if (rep.IsNull()) continue;
 
-        // local geometry bbox
-        Bnd_Box lbb;
-        bool have_geo = false;
-        for (int id : entry_refs(text, m->IdentLabel(rep))) {
-            Handle(Standard_Transient) g = find_by_label(m, id);
-            if (g.IsNull()) continue;
-            TopoDS_Shape s = build_geo(g);
-            if (s.IsNull()) continue;
-            Bnd_Box b;
-            BRepBndLib::Add(s, b);
-            if (!b.IsVoid()) {
-                lbb = b;
-                have_geo = true;
-            }
-            break;
-        }
-        if (!have_geo) continue;
-
-        // placement of the part in the assembly (identity if the
-        // relationship carries none)
-        gp_Ax2 ax;
-        bool have_ax = false;
-        for (int j = 1; j <= m->NbEntities() && !have_ax; ++j) {
+        // The transferred shapes are already placed in world
+        // coordinates (8.0.1 bakes the assembly placement into
+        // TransferRoots). A part's center is its placement
+        // translation anchor (the local geometry origin); parts
+        // without a placement sit at (0,0,0). The 8.0.1 model
+        // keeps rep/transform item references by entity name only,
+        // so a translation is used when resolvable, else the
+        // matching falls back to file order (first-unused wins).
+        double anchor[3] = {0., 0., 0.};
+        for (int j = 1; j <= m->NbEntities(); ++j) {
             Handle(Standard_Transient) e2 = m->Entity(j);
-            const auto* rr_p =
-                dynamic_cast<const StepRepr_RepresentationRelationshipWithTransformation*>(e2.get());
-            if (!rr_p) continue;
-            Handle(StepRepr_RepresentationRelationshipWithTransformation)
-                rr(rr_p);
+            if (!e2->IsKind(StepRepr_RepresentationRelationshipWithTransformation::get_type_descriptor()))
+                continue;
+            Handle(StepRepr_RepresentationRelationshipWithTransformation) rr(
+                reinterpret_cast<const StepRepr_RepresentationRelationshipWithTransformation*>(
+                    e2.get()));
             if (rr->Rep1().IsNull() || rr->Rep1() != rep)
                 continue;
-            for (int id : entry_refs(text, m->IdentLabel(e2))) {
-                Handle(Standard_Transient) idt = find_by_label(m, id);
-                const auto* idt_p =
-                    dynamic_cast<const StepRepr_ItemDefinedTransformation*>(
-                        idt.get());
-                if (!idt_p) continue;
-                Handle(StepRepr_ItemDefinedTransformation) idth(idt_p);
-                Handle(StepGeom_CartesianPoint) pt(
-                    dynamic_cast<const StepGeom_CartesianPoint*>(
-                        idt.get()));
-                if (pt.IsNull()) continue;
-                gp_Pnt loc(pt->CoordinatesValue(1),
-                           pt->CoordinatesValue(2),
-                           pt->CoordinatesValue(3));
-                gp_Dir z(0., 0., 1.), x(1., 0., 0.);
-                Handle(StepGeom_Axis2Placement3d) to(
-                    dynamic_cast<const StepGeom_Axis2Placement3d*>(
-                        idt.get()));
-                if (!to.IsNull()) {
-                    if (to->HasAxis()) {
-                        auto d = to->Axis()->DirectionRatios();
-                        z = gp_Dir(d[0], d[1], d[2]);
-                    }
-                    if (to->HasRefDirection()) {
-                        auto d = to->RefDirection()->DirectionRatios();
-                        x = gp_Dir(d[0], d[1], d[2]);
-                    }
-                }
-                ax = gp_Ax2(loc, z, x);
-                have_ax = true;
+            StepRepr_Transformation to = rr->TransformationOperator();
+            Handle(StepRepr_ItemDefinedTransformation) idt =
+                to.ItemDefinedTransformation();
+            if (idt.IsNull())
                 break;
+            Handle(StepRepr_RepresentationItem) it1 = idt->TransformItem1();
+            if (it1.IsNull())
+                break;
+            Handle(Standard_Transient) ent =
+                find_by_label(m, item_id(it1));
+            if (!ent.IsNull()
+                    && ent->IsKind(Geom_Transformation::get_type_descriptor())) {
+                const Geom_Transformation* gt =
+                    reinterpret_cast<const Geom_Transformation*>(ent.get());
+                gp_Trsf trsf = gt->Trsf();
+                if (trsf.Form() != gp_Identity) {
+                    anchor[0] = trsf.Value(1, 4);
+                    anchor[1] = trsf.Value(2, 4);
+                    anchor[2] = trsf.Value(3, 4);
+                }
             }
-        }
-
-        // world bbox: transform the 8 local corners
-        double x0, y0, z0, x1, y1, z1;
-        lbb.Get(x0, y0, z0, x1, y1, z1);
-        double wx0 =  1e30, wy0 =  1e30, wz0 =  1e30,
-               wx1 = -1e30, wy1 = -1e30, wz1 = -1e30;
-        for (int cx = 0; cx <= 1; ++cx)
-        for (int cy = 0; cy <= 1; ++cy)
-        for (int cz = 0; cz <= 1; ++cz) {
-            gp_Pnt c(cx ? x1 : x0, cy ? y1 : y0, cz ? z1 : z0);
-            gp_Pnt w = c;
-            if (have_ax) {
-                gp_Dir y(ax.Direction().Crossed(ax.XDirection()));
-                gp_Mat m;
-                m.SetRows(gp_XYZ(ax.XDirection().X(), ax.XDirection().Y(),
-                                ax.XDirection().Z()),
-                         gp_XYZ(y.X(), y.Y(), y.Z()),
-                         gp_XYZ(ax.Direction().X(), ax.Direction().Y(),
-                                ax.Direction().Z()));
-                gp_Trsf trf;
-                trf.SetTranslation(gp_Pnt(0., 0., 0.), ax.Location());
-                trf.SetRotationPart(gp_Quaternion(m));
-                w.Transform(trf);
-            }
-            wx0 = std::min(wx0, w.X());
-            wy0 = std::min(wy0, w.Y());
-            wz0 = std::min(wz0, w.Z());
-            wx1 = std::max(wx1, w.X());
-            wy1 = std::max(wy1, w.Y());
-            wz1 = std::max(wz1, w.Z());
+            break;
         }
 
         Part p;
         p.name = prod;
         for (const auto& e2 : edges)
             if (e2.second == prod) { p.parent = e2.first; break; }
-        p.c[0] = (wx0 + wx1) / 2;
-        p.c[1] = (wy0 + wy1) / 2;
-        p.c[2] = (wz0 + wz1) / 2;
+        p.c[0] = anchor[0];
+        p.c[1] = anchor[1];
+        p.c[2] = anchor[2];
         parts.push_back(p);
     }
     return parts;
@@ -319,17 +209,22 @@ static int read_to_meshes(const char* path, const char* out_path,
             }
         };
         if (is_step) {
-            STEPControl_Reader r;
-            if (r.ReadFile(path) != IFSelect_RetDone) return 1;
-            collect(r);
-            std::ifstream ifs(path, std::ios::binary);
-            std::istreambuf_iterator<char> eof;
-            std::string text(std::istreambuf_iterator<char>(ifs), eof);
-            parts = step_parts(text, r.StepModel());
+            STEPControl_Reader* r = new STEPControl_Reader();
+            if (r->ReadFile(path) != IFSelect_RetDone) {
+                delete r;
+                return 1;
+            }
+            collect(*r);
+            parts = step_parts(r->StepModel());
+            delete r;
         } else {
-            IGESControl_Reader r;
-            if (r.ReadFile(path) != IFSelect_RetDone) return 1;
-            collect_iges(r);
+            IGESControl_Reader* r = new IGESControl_Reader();
+            if (r->ReadFile(path) != IFSelect_RetDone) {
+                delete r;
+                return 1;
+            }
+            collect_iges(*r);
+            delete r;
         }
         if (shapes.empty()) return 1;
 
@@ -376,9 +271,15 @@ static int read_to_meshes(const char* path, const char* out_path,
         }
         if (meshes.empty()) return 1;
 
-        // Match each mesh to the nearest part (world bbox center).
-        // OCCT does not guarantee the mesh order equals the file's
-        // product order, so the geometry decides.
+        // Match each mesh to a part. In an assembly, only child
+        // parts own geometry (the parent's representation only
+        // aggregates the children), so a part without a parent is
+        // skipped when any part has one. Ties (all anchors equal:
+        // the 8.0.1 item references carry no resolvable label)
+        // fall back to file order, first-unused part wins.
+        bool has_children = false;
+        for (const auto& pt : parts)
+            if (!pt.parent.empty()) has_children = true;
         std::vector<bool> used(parts.size(), false);
         for (auto& md : meshes) {
             double x0 =  1e30, y0 =  1e30, z0 =  1e30;
@@ -397,6 +298,7 @@ static int read_to_meshes(const char* path, const char* out_path,
             double best_d = 0;
             for (size_t i = 0; i < parts.size(); ++i) {
                 if (used[i]) continue;
+                if (has_children && parts[i].parent.empty()) continue;
                 double dx = parts[i].c[0] - cx;
                 double dy = parts[i].c[1] - cy;
                 double dz = parts[i].c[2] - cz;
