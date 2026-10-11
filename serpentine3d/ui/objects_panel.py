@@ -218,12 +218,14 @@ class ObjectsPanel(QWidget):
         t = event.type()
         if t == QEvent.Type.MouseButtonPress:
             self._saved_scroll = self.tree.verticalScrollBar().value()
+            sb = self.tree.verticalScrollBar()
+            sb.blockSignals(True)
             idx = self.tree.indexAt(event.pos())
             if not idx.isValid():
+                sb.blockSignals(False)
                 return False
-            row = self.tree.row(idx)
+            row = idx.row()
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                # Manual range: select all between anchor and clicked
                 if self._anchor_row is not None:
                     lo, hi = (min(self._anchor_row, row),
                              max(self._anchor_row, row))
@@ -234,5 +236,7 @@ class ObjectsPanel(QWidget):
             else:
                 self._anchor_row = row
         elif t == QEvent.Type.MouseButtonRelease:
-            self.tree.verticalScrollBar().setValue(self._saved_scroll)
+            sb = self.tree.verticalScrollBar()
+            sb.blockSignals(False)
+            sb.setValue(self._saved_scroll)
         return False
