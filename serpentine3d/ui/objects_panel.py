@@ -118,7 +118,6 @@ class ObjectsPanel(QWidget):
         if obj.id in selected_ids:
             item.setBackground(0, hl)
             item.setBackground(1, hl)
-            item.setSelected(True)
         else:
             c = self.scene.color_of(obj)
             tint = QColor(int(c[0] * 255), int(c[1] * 255),
