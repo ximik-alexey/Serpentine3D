@@ -29,6 +29,7 @@ from .ui.command_line import CommandLine
 from .ui.dialogs import untether
 from .ui.display_panel import DisplaySettingsDialog
 from .ui.layers_panel import LayersPanel
+from .ui.objects_panel import ObjectsPanel
 from .ui.properties import PropertiesPanel
 from .ui.viewport import Viewport, set_default_gl_format
 
@@ -183,6 +184,13 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea,
                            self._layer_dock)
 
+        self.objects_panel = ObjectsPanel(self.scene)
+        self._objects_dock = QDockWidget("Objects", self)
+        self._objects_dock.setObjectName("objectsDock")
+        self._objects_dock.setWidget(self.objects_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea,
+                           self._objects_dock)
+
         # Display controls belong to the viewport title menu. Create their
         # modeless window only when requested, leaving this column for
         # Properties and Layers.
@@ -190,7 +198,7 @@ class MainWindow(QMainWindow):
 
         # The panels a field's Enter must stay in, and whose splitter the
         # user drags: see eventFilter.
-        self._panel_docks = (self._prop_dock, self._layer_dock)
+        self._panel_docks = (self._prop_dock, self._layer_dock, self._objects_dock)
         for dock in self._panel_docks:
             dock.installEventFilter(self)
         # proportions are set post-show in _balance_docks (a pre-show
@@ -941,6 +949,9 @@ class MainWindow(QMainWindow):
         m_view.addSeparator()
         self._action(m_view, "Toggle Grid", "F7",
                      lambda: self.run_command("grid"))
+        self._action(m_view, "Objects Panel", None,
+                     lambda: self._objects_dock.setVisible(
+                         not self._objects_dock.isVisible()))
 
         m_draft = mb.addMenu("&Drafting")
         self._action(m_draft, "New Layout...", None,
