@@ -114,9 +114,7 @@ class DisplayMesh:
 
 
 def _deflection_for(shape) -> float:
-    (mn, mx) = geometry.bbox(shape)
-    diag = float(np.linalg.norm(np.subtract(mx, mn)))
-    return max(diag * 0.002, 1e-4)
+    return 0.005
 
 
 def default_deflection(shape) -> float:
