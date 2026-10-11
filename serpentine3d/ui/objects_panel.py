@@ -135,6 +135,6 @@ class ObjectsPanel(QWidget):
             oid = item.data(Qt.ItemDataRole.UserRole)
             if oid in selected:
                 item.setSelected(True)
-        self.list.verticalScrollBar().setValue(scroll)
+        QTimer.singleShot(0, lambda: self.list.verticalScrollBar().setValue(scroll))
         self._refresh_colors()
         self._updating = False
