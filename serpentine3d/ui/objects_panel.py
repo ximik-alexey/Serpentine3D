@@ -205,10 +205,12 @@ class ObjectsPanel(QWidget):
         self._updating = False
 
     def eventFilter(self, obj, event):
-        """Handle selection manually; let checkbox clicks through."""
+        """Handle selection and checkboxes manually; every press is
+        consumed, so a click never scrolls the tree."""
         if obj is not self.tree.viewport():
             return False
-        if event.type() != QEvent.Type.MouseButtonPress:
+        if (event.type() != QEvent.Type.MouseButtonPress
+                or event.button() != Qt.MouseButton.LeftButton):
             return False
         idx = self.tree.indexAt(event.pos())
         if not idx.isValid():
@@ -216,9 +218,31 @@ class ObjectsPanel(QWidget):
         item = self.tree.itemFromIndex(idx)
         if item is None:
             return False
-        # Let checkbox clicks through (left indicator area)
-        if event.pos().x() < 25:
-            return False
+        # Row depth via the index parents (the bindings' QModelIndex
+        # has no depth()). With root decoration on, the branch cell
+        # takes the first indentation and the checkbox indicator sits
+        # in the cell after it, one cell per depth.
+        depth, p = 0, idx.parent()
+        while p.isValid():
+            depth += 1
+            p = p.parent()
+        ind = self.tree.indentation()
+        left = ind * (depth + 1)
+        if left <= event.pos().x() < left + ind:
+            # Checkbox indicator: toggle here and consume the press, so
+            # one click flips the box (a child's indicator lives past
+            # the old x < 25 strip, where the press used to be eaten)
+            # and the click never scrolls the tree.
+            state = item.checkState(0)
+            item.setCheckState(
+                0, Qt.CheckState.Checked if state == Qt.CheckState.Unchecked
+                else Qt.CheckState.Unchecked)
+            return True
+        if event.pos().x() < left:
+            # Branch cell: the expand arrow, kept working by hand.
+            if item.childCount() > 0:
+                item.setExpanded(not item.isExpanded())
+            return True
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if data is None:
             return False

@@ -41,6 +41,14 @@
   untyped-shape fallback, and edge endpoints, snap points and the viewport
   curves work as before.
 
+- **Objects panel visibility checkbox works with one click (#66).** The
+  manual click handling used a fixed pixel strip for the checkbox, so a
+  grouped object's indented indicator fell outside it: the first click
+  was eaten and a second one was needed. The panel now locates the
+  indicator by the row's depth and toggles it in place — one click on
+  any row's box flips visibility, the branch arrow still expands and
+  collapses groups, and a click never scrolls the tree.
+
 ## 0.10.8 (2026-10-05)
 
 ### Added
