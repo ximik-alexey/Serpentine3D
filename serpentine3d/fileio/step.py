@@ -1,62 +1,78 @@
-"""STEP import/export via OCCT."""
-
+"""STEP import/export via OCCT (ctypes C++ wrapper)."""
 from __future__ import annotations
 
-from ..core import occ
-from ..core.occ import (
-    IFSelect_ReturnStatus, STEPControl_Reader, STEPControl_StepModelType,
-    STEPControl_Writer, TopExp_Explorer,
-)
+import numpy as np
+
+from .step_iges import iges_read_mesh, mesh_write_iges, mesh_write_step, step_read_mesh
+
+
+def _mesh_to_shape(verts: list[float], tris: list[int]):
+    """Build a MeshShape from flat vertex/triangle lists."""
+    from ..core.mesh import MeshShape
+    v = np.array(verts, dtype=np.float64).reshape(-1, 3)
+    t = np.array(tris, dtype=np.uint32).reshape(-1, 3)
+    return MeshShape(v, t)
+
+def import_step(path: str) -> list:
+    """Read a STEP file, return a list of MeshShapes."""
+    verts, tris = step_read_mesh(path)
+    return [_mesh_to_shape(verts, tris)]
 
 
 def export_step(shapes: list, path: str) -> int:
-    """Write `shapes` as STEP; returns how many meshes it had to leave out.
+    """Write shapes as STEP. Returns count of skipped meshes.
 
-    STEP carries BREP and nothing else, so an imported mesh cannot go
-    in one. Handing the writer a mesh anyway raised a pybind overload
-    TypeError, which reached the user as a wall of OCP signatures.
+    Currently only mesh export is supported (BREP export is a stub).
     """
     from ..core.mesh import MeshShape
-    writer = STEPControl_Writer()
     skipped = 0
+    mesh = None
     for shape in shapes:
         if isinstance(shape, MeshShape):
+            if mesh is None:
+                mesh = shape
+            else:
+                skipped += 1
+        else:
             skipped += 1
-            continue
-        status = writer.Transfer(shape,
-                                 STEPControl_StepModelType.STEPControl_AsIs)
-        if status != IFSelect_ReturnStatus.IFSelect_RetDone:
-            raise IOError("STEP transfer failed for a shape")
-    if skipped == len(shapes):
+    if mesh is None:
         raise ValueError(
-            "STEP cannot carry mesh objects, and every object here is one. "
-            "Export to OBJ, STL or 3MF instead.")
-    if writer.Write(path) != IFSelect_ReturnStatus.IFSelect_RetDone:
-        raise IOError(f"Could not write STEP file: {path}")
+            "STEP export requires at least one mesh object. "
+            "BREP export is not yet available.")
+    mesh_write_step(
+        mesh.vertices.ravel().tolist(),
+        mesh.triangles.ravel().tolist(),
+        path,
+    )
     return skipped
 
 
-def import_step(path: str) -> list:
-    """Returns a list of top-level TopoDS_Shapes from the file."""
-    reader = STEPControl_Reader()
-    if reader.ReadFile(path) != IFSelect_ReturnStatus.IFSelect_RetDone:
-        raise IOError(f"Could not read STEP file: {path}")
-    reader.TransferRoots()
-    shapes = []
-    for i in range(1, reader.NbShapes() + 1):
-        shape = reader.Shape(i)
-        if shape.IsNull():
-            continue
-        # unpack top-level compounds into individual objects
-        if shape.ShapeType() == occ.COMPOUND:
-            it = TopExp_Explorer(shape, occ.SOLID)
-            found = False
-            while it.More():
-                shapes.append(it.Current())
-                found = True
-                it.Next()
-            if not found:
-                shapes.append(shape)
+def import_iges(path: str) -> list:
+    """Read an IGES file, return a list of MeshShapes."""
+    verts, tris = iges_read_mesh(path)
+    return [_mesh_to_shape(verts, tris)]
+
+
+def export_iges(shapes: list, path: str) -> int:
+    """Write shapes as IGES. Returns count of skipped meshes."""
+    from ..core.mesh import MeshShape
+    skipped = 0
+    mesh = None
+    for shape in shapes:
+        if isinstance(shape, MeshShape):
+            if mesh is None:
+                mesh = shape
+            else:
+                skipped += 1
         else:
-            shapes.append(shape)
-    return shapes
+            skipped += 1
+    if mesh is None:
+        raise ValueError(
+            "IGES export requires at least one mesh object. "
+            "BREP export is not yet available.")
+    mesh_write_iges(
+        mesh.vertices.ravel().tolist(),
+        mesh.triangles.ravel().tolist(),
+        path,
+    )
+    return skipped

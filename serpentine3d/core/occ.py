@@ -5,24 +5,41 @@ via OCP (pip-installable pybind11 wheels); pythonocc-core uses the same class
 names under OCC.Core.*, so porting means editing this file, not the app.
 """
 
+from OCP.BinTools import bintools as _bintools
+from OCP.Bnd import Bnd_Box
+from OCP.BRep import BRep_Tool
+from OCP.BRepAdaptor import BRepAdaptor_Curve
+from OCP.BRepBndLib import brepbndlib
+from OCP.BRepGProp import brepgprop
+from OCP.BRepLib import breplib
+from OCP.GeomAbs import GeomAbs_Shape
 from OCP.gp import (
     gp_Pnt, gp_Vec, gp_Dir, gp_Ax1, gp_Ax2, gp_Ax3, gp_Pln, gp_Trsf,
     gp_GTrsf, gp_Circ, gp_Elips, gp_XYZ, gp_Quaternion, gp_Mat,
+    gp_Pnt2d,
 )
+from OCP.GProp import GProp_GProps
+from OCP.TopAbs import TopAbs_ShapeEnum
+from OCP.TopExp import TopExp, TopExp_Explorer
+from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import (
-    TopoDS, TopoDS_Shape, TopoDS_Edge, TopoDS_Wire, TopoDS_Face,
-    TopoDS_Shell, TopoDS_Solid, TopoDS_Compound, TopoDS_Vertex,
-    TopoDS_Builder, TopoDS_Iterator,
+    TopoDS_Compound,
+    TopoDS_Edge,
+    TopoDS_Face,
+    TopoDS_Shape,
+    TopoDS_Shell,
+    TopoDS_Solid,
+    TopoDS_Vertex,
+    TopoDS_Wire,
 )
-from OCP.TopAbs import TopAbs_ShapeEnum, TopAbs_Orientation
-from OCP.TopExp import TopExp_Explorer, TopExp
-from OCP.TopTools import TopTools_IndexedMapOfShape
-from OCP.BRep import BRep_Tool, BRep_Builder
-from OCP.BRepLib import BRepLib, BRepLib_FindSurface, breplib
+from OCP.TopTools import (
+    TopTools_IndexedMapOfShape,
+)
+from OCP.BRep import BRep_Builder
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeFace,
-    BRepBuilderAPI_MakeVertex, BRepBuilderAPI_MakePolygon,
-    BRepBuilderAPI_Transform, BRepBuilderAPI_GTransform, BRepBuilderAPI_Copy,
+    BRepBuilderAPI_MakeVertex, BRepBuilderAPI_Transform,
+    BRepBuilderAPI_GTransform, BRepBuilderAPI_Copy,
     BRepBuilderAPI_Sewing, BRepBuilderAPI_MakeSolid,
 )
 from OCP.BRepPrimAPI import (
@@ -34,44 +51,31 @@ from OCP.BRepAlgoAPI import (
     BRepAlgoAPI_Fuse, BRepAlgoAPI_Cut, BRepAlgoAPI_Common,
     BRepAlgoAPI_Splitter,
 )
-from OCP.TopTools import TopTools_ListOfShape, TopTools_HSequenceOfShape
-from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
-from OCP.GeomConvert import GeomConvert
 from OCP.BRepOffsetAPI import (
     BRepOffsetAPI_ThruSections, BRepOffsetAPI_MakePipe,
     BRepOffsetAPI_MakePipeShell, BRepOffsetAPI_MakeOffset,
 )
-from OCP.ChFi2d import ChFi2d_FilletAPI
-from OCP.GeomAbs import GeomAbs_JoinType, GeomAbs_CurveType
-from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet, BRepFilletAPI_MakeChamfer
-from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
-from OCP.BRepTopAdaptor import BRepTopAdaptor_FClass2d
-from OCP.TopAbs import TopAbs_State
-from OCP.gp import gp_Pnt2d
-from OCP.BRepMesh import BRepMesh_IncrementalMesh
-from OCP.BRepGProp import BRepGProp, brepgprop
-from OCP.BRepBndLib import BRepBndLib, brepbndlib
-from OCP.BRepTools import BRepTools
-from OCP.BRepCheck import BRepCheck_Analyzer
-from OCP.Bnd import Bnd_Box
-from OCP.GProp import GProp_GProps
 from OCP.GC import GC_MakeArcOfCircle, GC_MakeSegment, GC_MakeCircle
 from OCP.GeomAPI import GeomAPI_Interpolate, GeomAPI_PointsToBSpline
 from OCP.Geom import (
     Geom_BSplineCurve, Geom_Circle, Geom_TrimmedCurve, Geom_Plane,
     Geom_Ellipse, Geom_Line,
 )
-from OCP.GeomAbs import GeomAbs_Shape, GeomAbs_C2
-from OCP.GCPnts import GCPnts_TangentialDeflection, GCPnts_UniformDeflection
 from OCP.TColgp import TColgp_Array1OfPnt, TColgp_HArray1OfPnt
 from OCP.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
-from OCP.TopLoc import TopLoc_Location
-from OCP.Poly import Poly_Triangulation
-from OCP.BinTools import bintools as _bintools
-# STEP/IGES I/O unavailable in this build (SWIG wrapper segfaults on load).
-STEPControl_Reader = STEPControl_Writer = None
-STEPControl_StepModelType = IFSelect_ReturnStatus = Interface_Static = None
-from OCP.ShapeFix import ShapeFix_Shape
+from OCP.BRepCheck import BRepCheck_Analyzer
+from OCP.TopoDS import TopoDS_Iterator
+from OCP.BRepMesh import BRepMesh_IncrementalMesh
+from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet, BRepFilletAPI_MakeChamfer
+from OCP.ChFi2d import ChFi2d_FilletAPI
+from OCP.GeomAbs import GeomAbs_JoinType, GeomAbs_CurveType, GeomAbs_C2
+from OCP.GCPnts import GCPnts_TangentialDeflection, GCPnts_UniformDeflection
+from OCP.GeomConvert import GeomConvert
+from OCP.BRepTools import BRepTools
+from OCP.TopAbs import TopAbs_Orientation, TopAbs_State
+from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
+from OCP.TopTools import TopTools_ListOfShape
+from OCP.BRepBuilderAPI import BRepBuilderAPI_MakePolygon
 
 BACKEND = "OCP"
 
@@ -158,7 +162,6 @@ def without_creases(shape):
     A shape with no creased face comes back as it is, so everything else
     measures exactly as before and pays nothing for the check.
     """
-    from OCP.GeomAbs import GeomAbs_Shape
     creased = False
     exp = TopExp_Explorer(shape, FACE)
     while exp.More() and not creased:
