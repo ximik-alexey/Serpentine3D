@@ -23,6 +23,12 @@
   untrimmed NURBS faces retain their native geometry. Operations that would
   collapse or break the geometry leave the original intact.
 
+- **STEP assembly structure in the objects tree (#67).** Importing a
+  STEP assembly (for example `sborka.step` with `telo_1` / `telo_2`
+  under `sborka`) now brings in the parts with their product names and
+  groups them under the parent product. The objects panel shows the
+  assembly as a named group with its part count; flat files and IGES
+  imports are unaffected.
 ### Fixed
 
 - **Grouping and ungrouping preserve selection (#63).** The resulting group

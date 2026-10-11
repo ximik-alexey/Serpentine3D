@@ -173,12 +173,17 @@ def _import_file(scene, path: str, ext: str, report, replace: bool = False) -> i
         native.load_scene(scene, path)
         return len(scene.all())
     if ext in (".step", ".stp"):
-        shapes = step.import_step(path)
+        parts = step.import_step(path)
         base = os.path.splitext(os.path.basename(path))[0]
-        for i, shape in enumerate(shapes, 1):
-            name = base if len(shapes) == 1 else f"{base} {i:02d}"
-            scene.add(shape, name=name)
-        return len(shapes)
+        for i, (pname, parent, shape) in enumerate(parts, 1):
+            # The file's own product name wins; the base-name fallback
+            # stays for files without assembly structure.
+            name = pname if pname else (
+                base if len(parts) == 1 else f"{base} {i:02d}")
+            obj = scene.add(shape, name=name)
+            if parent:
+                scene.update(obj.id, group_id=parent)
+        return len(parts)
     if ext == ".obj":
         named = obj.import_obj(path)
         for name, shape in named:

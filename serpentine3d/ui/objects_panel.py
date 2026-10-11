@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 
 from PySide6.QtCore import QEvent, Qt, QTimer
@@ -91,9 +92,13 @@ class ObjectsPanel(QWidget):
             self.tree.addTopLevelItem(item)
 
         # Groups: parent + children
-        for members in groups.values():
+        for gid, members in groups.items():
             all_vis = all(o.visible for o in members)
-            parent = QTreeWidgetItem([f"Group  ({len(members)})", ""])
+            # The group command makes 8-hex uuid group ids and shows
+            # them as "Group"; named groups (e.g. a STEP product) show
+            # the name.
+            label = "Group" if re.fullmatch(r"[0-9a-f]{8}", gid) else gid
+            parent = QTreeWidgetItem([f"{label}  ({len(members)})", ""])
             parent.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
             parent.setCheckState(0, Qt.CheckState.Checked
                                 if all_vis else Qt.CheckState.Unchecked)

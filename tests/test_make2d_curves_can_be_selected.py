@@ -101,7 +101,7 @@ from serpentine3d.core.history import History
 from serpentine3d.ui.properties import PropertiesPanel
 from serpentine3d.fileio.step import export_step, import_step
 export_step([g.make_torus((0, 0, 0), 10, 3)], 'torus.step')
-source = import_step('torus.step')[0]
+source = import_step('torus.step')[0][2]
 algo = HLRBRep_Algo()
 algo.Add(source)
 algo.Projector(hlr._projector((0, 0, 0), (1, 1, 1), (1, -1, 0)))

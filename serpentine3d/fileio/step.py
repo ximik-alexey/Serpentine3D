@@ -14,10 +14,14 @@ def _to_mesh_shape(verts: np.ndarray, tris: np.ndarray):
     return MeshShape(v, t)
 
 
-def import_step(path: str) -> list:
-    """Read a STEP file, return a list of MeshShapes (one per part)."""
+def import_step(path: str) -> list[tuple[str, str, object]]:
+    """Read a STEP file, return (name, parent, MeshShape) per part.
+
+    name is the product name from the file, parent its assembly's
+    product name; both empty when the file has no assembly structure.
+    """
     meshes = step_read_meshes(path)
-    return [_to_mesh_shape(v, t) for v, t in meshes]
+    return [(n, p, _to_mesh_shape(v, t)) for n, p, v, t in meshes]
 
 
 def export_step(shapes: list, path: str) -> int:
@@ -30,10 +34,13 @@ def export_step(shapes: list, path: str) -> int:
         "Export to OBJ, STL or 3MF instead.")
 
 
-def import_iges(path: str) -> list:
-    """Read an IGES file, return a list of MeshShapes (one per part)."""
+def import_iges(path: str) -> list[tuple[str, str, object]]:
+    """Read an IGES file, return (name, parent, MeshShape) per part.
+
+    Names are empty: IGES has no assembly structure.
+    """
     meshes = iges_read_meshes(path)
-    return [_to_mesh_shape(v, t) for v, t in meshes]
+    return [(n, p, _to_mesh_shape(v, t)) for n, p, v, t in meshes]
 
 
 def export_iges(shapes: list, path: str) -> int:

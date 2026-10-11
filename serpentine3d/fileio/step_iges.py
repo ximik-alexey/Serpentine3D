@@ -1,8 +1,9 @@
 """STEP/IGES I/O via ctypes C++ wrapper (bypasses broken SWIG modules).
-
 Exchange format: multi-mesh file.
   [4B n_meshes]
-  per mesh: [4B nv][4B nt][nv*12B float xyz][nt*12B int ijk]
+  per mesh: [4B nname][name bytes][4B nparent][parent bytes]
+            [4B nv][4B nt][nv*12B float xyz][nt*12B int ijk]
+  (name/parent are UTF-8; empty for IGES)
 """
 from __future__ import annotations
 
@@ -26,14 +27,23 @@ _lib.mesh_write_iges.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
 _lib.mesh_write_iges.restype = ctypes.c_int
 
 
-def _read_multi_mesh(path: str) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Read a multi-mesh file, return list of (vertices, triangles) arrays."""
+def _read_multi_mesh(
+        path: str) -> list[tuple[str, str, np.ndarray, np.ndarray]]:
+    """Read a multi-mesh file, return (name, parent, vertices, triangles)."""
     with open(path, "rb") as f:
         raw = f.read()
     n_meshes = struct.unpack_from("i", raw, 0)[0]
     results = []
     off = 4
     for _ in range(n_meshes):
+        nname = struct.unpack_from("i", raw, off)[0]
+        off += 4
+        name = raw[off:off + nname].decode("utf-8", "replace")
+        off += nname
+        nparent = struct.unpack_from("i", raw, off)[0]
+        off += 4
+        parent = raw[off:off + nparent].decode("utf-8", "replace")
+        off += nparent
         nv, nt = struct.unpack_from("ii", raw, off)
         off += 8
         verts = np.frombuffer(raw, dtype=np.float32, count=nv * 3,
@@ -42,24 +52,31 @@ def _read_multi_mesh(path: str) -> list[tuple[np.ndarray, np.ndarray]]:
         tris = np.frombuffer(raw, dtype=np.int32, count=nt * 3,
                              offset=off).reshape(nt, 3).copy()
         off += nt * 12
-        results.append((verts, tris))
+        results.append((name, parent, verts, tris))
     return results
 
 
-def _write_multi_mesh(path: str,
-                      meshes: list[tuple[np.ndarray, np.ndarray]]) -> None:
-    """Write a multi-mesh file from list of (vertices, triangles) arrays."""
+def _write_multi_mesh(
+        path: str,
+        meshes: list[tuple[str, str, np.ndarray, np.ndarray]]) -> None:
+    """Write a multi-mesh file from (name, parent, vertices, triangles)."""
     with open(path, "wb") as f:
         f.write(struct.pack("i", len(meshes)))
-        for v, t in meshes:
-            nv, nt = len(v), len(t)
-            f.write(struct.pack("ii", nv, nt))
+        for name, parent, v, t in meshes:
+            nb = name.encode("utf-8")
+            pb = parent.encode("utf-8")
+            f.write(struct.pack("i", len(nb)))
+            f.write(nb)
+            f.write(struct.pack("i", len(pb)))
+            f.write(pb)
+            f.write(struct.pack("ii", len(v), len(t)))
             f.write(np.ascontiguousarray(v, np.float32).tobytes())
             f.write(np.ascontiguousarray(t, np.int32).tobytes())
 
 
-def step_read_meshes(path: str) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Read a STEP file, return list of (vertices, triangles) per shape."""
+def step_read_meshes(
+        path: str) -> list[tuple[str, str, np.ndarray, np.ndarray]]:
+    """Read a STEP file, return (name, parent, vertices, triangles) per part."""
     with tempfile.NamedTemporaryFile(suffix=".mesh", delete=False) as tmp:
         tmp_path = tmp.name
     try:
@@ -72,14 +89,16 @@ def step_read_meshes(path: str) -> list[tuple[np.ndarray, np.ndarray]]:
 
 
 def mesh_write_step(
-        meshes: list[tuple[np.ndarray, np.ndarray]], path: str) -> None:
+        meshes: list[tuple[str, str, np.ndarray, np.ndarray]],
+        path: str) -> None:
     """Write mesh data as a STEP file (stub)."""
     raise NotImplementedError(
         "STEP export (mesh→BREP) not yet available in OCCT 8.0.1")
 
 
-def iges_read_meshes(path: str) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Read an IGES file, return list of (vertices, triangles) per shape."""
+def iges_read_meshes(
+        path: str) -> list[tuple[str, str, np.ndarray, np.ndarray]]:
+    """Read an IGES file, return (name, parent, vertices, triangles) per part."""
     with tempfile.NamedTemporaryFile(suffix=".mesh", delete=False) as tmp:
         tmp_path = tmp.name
     try:
@@ -92,7 +111,8 @@ def iges_read_meshes(path: str) -> list[tuple[np.ndarray, np.ndarray]]:
 
 
 def mesh_write_iges(
-        meshes: list[tuple[np.ndarray, np.ndarray]], path: str) -> None:
+        meshes: list[tuple[str, str, np.ndarray, np.ndarray]],
+        path: str) -> None:
     """Write mesh data as an IGES file (stub)."""
     raise NotImplementedError(
         "IGES export (mesh→BREP) not yet available in OCCT 8.0.1")
