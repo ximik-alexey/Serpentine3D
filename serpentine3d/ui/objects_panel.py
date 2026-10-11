@@ -59,6 +59,7 @@ class ObjectsPanel(QWidget):
     def rebuild(self):
         """Redraw the list from the scene."""
         self._updating = True
+        scroll = self.list.verticalScrollBar().value()
         self.list.clear()
         from . import theme
         hl = QColor(theme.ACCENT)
@@ -79,6 +80,7 @@ class ObjectsPanel(QWidget):
                 tint.setAlpha(40)
                 item.setBackground(tint)
             self.list.addItem(item)
+        self.list.verticalScrollBar().setValue(scroll)
         self._updating = False
 
     # -- selection ----------------------------------------------------------
