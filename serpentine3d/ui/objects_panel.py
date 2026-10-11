@@ -1,12 +1,14 @@
-"""Objects panel: a list of everything in the viewport."""
+"""Objects panel: a tree of all scene objects with visibility checkboxes."""
 
 from __future__ import annotations
+
+from collections import defaultdict
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QListWidget,
-    QListWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -18,8 +20,9 @@ def _kind_label(kind: str) -> str:
 
 
 class ObjectsPanel(QWidget):
-    """A scrollable list of all scene objects: name, kind, visibility.
+    """A tree of all scene objects: visibility checkbox, name, kind.
 
+    Grouped objects appear as a parent row with children underneath.
     Bidirectional selection: picking a row selects it in the viewport;
     selecting in the viewport highlights it here.
     """
@@ -30,15 +33,19 @@ class ObjectsPanel(QWidget):
         self.selection = selection
         self._updating = False
 
-        self.list = QListWidget()
-        self.list.setSelectionMode(
-            QListWidget.SelectionMode.ExtendedSelection)
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(2)
+        self.tree.setHeaderLabels(["Object", "Type"])
+        self.tree.setSelectionMode(
+            QTreeWidget.SelectionMode.ExtendedSelection)
+        self.tree.setRootIsDecorated(True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.list)
+        layout.addWidget(self.tree)
 
-        self.list.itemSelectionChanged.connect(self._on_select)
+        self.tree.itemSelectionChanged.connect(self._on_select)
+        self.tree.itemChanged.connect(self._on_item_changed)
         scene.add_listener(self._on_notify, kinds=("objects",))
         if selection is not None:
             selection.add_listener(self._on_scene_select)
@@ -57,31 +64,65 @@ class ObjectsPanel(QWidget):
     # -- population ---------------------------------------------------------
 
     def rebuild(self):
-        """Redraw the list from the scene."""
+        """Redraw the tree from the scene."""
         self._updating = True
-        scroll = self.list.verticalScrollBar().value()
-        self.list.clear()
+        scroll = self.tree.verticalScrollBar().value()
+        self.tree.clear()
         from . import theme
         hl = QColor(theme.ACCENT)
         selected_ids = (set(self.selection._ids)
                        if self.selection else set())
+
+        # Group objects by group_id
+        ungrouped = []
+        groups: dict[str, list] = defaultdict(list)
         for obj in self.scene.all():
-            vis = "✓ " if obj.visible else "  "
-            text = f"{vis}{obj.name}  [{_kind_label(obj.kind)}]"
-            item = QListWidgetItem(text)
-            item.setData(Qt.ItemDataRole.UserRole, obj.id)
-            if obj.id in selected_ids:
-                item.setBackground(hl)
-                item.setSelected(True)
+            if obj.group_id:
+                groups[obj.group_id].append(obj)
             else:
-                c = self.scene.color_of(obj)
-                tint = QColor(int(c[0] * 255), int(c[1] * 255),
-                             int(c[2] * 255))
-                tint.setAlpha(40)
-                item.setBackground(tint)
-            self.list.addItem(item)
-        self.list.verticalScrollBar().setValue(scroll)
+                ungrouped.append(obj)
+
+        # Ungrouped objects: top-level rows
+        for obj in ungrouped:
+            item = self._make_item(obj, selected_ids, hl)
+            self.tree.addTopLevelItem(item)
+
+        # Groups: parent + children
+        for members in groups.values():
+            parent = QTreeWidgetItem([f"Group  ({len(members)})", ""])
+            parent.setData(0, Qt.ItemDataRole.UserRole, None)
+            parent.setFlags(parent.flags() & ~Qt.ItemIsSelectable)
+            for obj in members:
+                child = self._make_item(obj, selected_ids, hl)
+                parent.addChild(child)
+            self.tree.addTopLevelItem(parent)
+            parent.setExpanded(True)
+
+        self.tree.verticalScrollBar().setValue(scroll)
         self._updating = False
+
+    def _make_item(self, obj, selected_ids, hl):
+        """Create a QTreeWidgetItem for one object with a visibility checkbox."""
+
+        flags = (Qt.ItemIsSelectable | Qt.ItemIsEnabled
+                 | Qt.ItemIsUserCheckable)
+        item = QTreeWidgetItem([obj.name, _kind_label(obj.kind)])
+        item.setFlags(flags)
+        item.setCheckState(0, Qt.CheckState.Checked
+                          if obj.visible else Qt.CheckState.Unchecked)
+        item.setData(0, Qt.ItemDataRole.UserRole, obj.id)
+        if obj.id in selected_ids:
+            item.setBackground(0, hl)
+            item.setBackground(1, hl)
+            item.setSelected(True)
+        else:
+            c = self.scene.color_of(obj)
+            tint = QColor(int(c[0] * 255), int(c[1] * 255),
+                         int(c[2] * 255))
+            tint.setAlpha(40)
+            item.setBackground(0, tint)
+            item.setBackground(1, tint)
+        return item
 
     # -- selection ----------------------------------------------------------
 
@@ -90,41 +131,54 @@ class ObjectsPanel(QWidget):
         from . import theme
         hl = QColor(theme.ACCENT)
         selected = (set(self.selection._ids)
-                   if self.selection else set())
-        for i in range(self.list.count()):
-            item = self.list.item(i)
-            obj_id = item.data(Qt.ItemDataRole.UserRole)
-            if obj_id is None:
-                continue
+                    if self.selection else set())
+        for i in range(self.tree.topLevelItemCount()):
+            top = self.tree.topLevelItem(i)
+            self._color_item(top, selected, hl)
+
+    def _color_item(self, item, selected, hl):
+        """Recursively color an item and its children."""
+        obj_id = item.data(0, Qt.ItemDataRole.UserRole)
+        if obj_id is not None:
             if obj_id in selected:
-                item.setBackground(hl)
+                item.setBackground(0, hl)
+                item.setBackground(1, hl)
             else:
                 obj = self.scene.get(obj_id)
-                if obj is None:
-                    continue
-                c = self.scene.color_of(obj)
-                tint = QColor(int(c[0] * 255), int(c[1] * 255),
-                             int(c[2] * 255))
-                tint.setAlpha(40)
-                item.setBackground(tint)
+                if obj is not None:
+                    c = self.scene.color_of(obj)
+                    tint = QColor(int(c[0] * 255), int(c[1] * 255),
+                                 int(c[2] * 255))
+                    tint.setAlpha(40)
+                    item.setBackground(0, tint)
+                    item.setBackground(1, tint)
+        for i in range(item.childCount()):
+            self._color_item(item.child(i), selected, hl)
 
     def _on_select(self):
-        """User picked rows in the list: select them in the scene."""
+        """User picked rows in the tree: select them in the scene."""
         if self._updating or self.selection is None:
             return
         self._refresh_colors()
-        items = self.list.selectedItems()
-        ids = [it.data(Qt.ItemDataRole.UserRole)
+        items = self.tree.selectedItems()
+        ids = [it.data(0, Qt.ItemDataRole.UserRole)
                for it in items
-               if it.data(Qt.ItemDataRole.UserRole)]
+               if it.data(0, Qt.ItemDataRole.UserRole)]
         if ids:
             self.selection.set(ids)
 
     def _on_scene_select(self):
-        """Scene selection changed: update row colors in place.
-
-        Does NOT touch the list's selection model (clearSelection/
-        setSelected): that triggers Qt's auto-scroll to the selected
-        rows. The list's selection state is set during rebuild().
-        """
+        """Scene selection changed: update row colors in place."""
         self._refresh_colors()
+
+    def _on_item_changed(self, item, column):
+        """Checkbox toggled: update object visibility in the scene."""
+        if self._updating or column != 0:
+            return
+        obj_id = item.data(0, Qt.ItemDataRole.UserRole)
+        if obj_id is None:
+            return
+        visible = item.checkState(0) == Qt.CheckState.Checked
+        self._updating = True
+        self.scene.update(obj_id, visible=visible)
+        self._updating = False
