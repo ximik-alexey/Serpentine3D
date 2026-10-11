@@ -119,7 +119,20 @@ class ObjectsPanel(QWidget):
             self.selection.set(ids)
 
     def _on_scene_select(self):
-        """Scene selection changed: highlight here."""
+        """Scene selection changed: sync list selection in place.
+
+        Does NOT rebuild (no clear): preserves scroll position and
+        the shift-click anchor.
+        """
         if self.selection is None:
             return
-        self.rebuild()
+        selected = set(self.selection._ids)
+        self._updating = True
+        self.list.clearSelection()
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            oid = item.data(Qt.ItemDataRole.UserRole)
+            if oid in selected:
+                item.setSelected(True)
+        self._refresh_colors()
+        self._updating = False
