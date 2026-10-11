@@ -89,9 +89,13 @@ class ObjectsPanel(QWidget):
 
         # Groups: parent + children
         for members in groups.values():
+            all_vis = all(o.visible for o in members)
             parent = QTreeWidgetItem([f"Group  ({len(members)})", ""])
-            parent.setData(0, Qt.ItemDataRole.UserRole, None)
-            parent.setFlags(parent.flags() & ~Qt.ItemIsSelectable)
+            parent.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            parent.setCheckState(0, Qt.CheckState.Checked
+                                if all_vis else Qt.CheckState.Unchecked)
+            parent.setData(0, Qt.ItemDataRole.UserRole,
+                          [o.id for o in members])
             for obj in members:
                 child = self._make_item(obj, selected_ids, hl)
                 parent.addChild(child)
@@ -172,13 +176,31 @@ class ObjectsPanel(QWidget):
         self._refresh_colors()
 
     def _on_item_changed(self, item, column):
-        """Checkbox toggled: update object visibility in the scene."""
+        """Checkbox toggled: update visibility (single, group, or multi)."""
         if self._updating or column != 0:
             return
-        obj_id = item.data(0, Qt.ItemDataRole.UserRole)
-        if obj_id is None:
-            return
-        visible = item.checkState(0) == Qt.CheckState.Checked
         self._updating = True
-        self.scene.update(obj_id, visible=visible)
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        visible = item.checkState(0) == Qt.CheckState.Checked
+        if isinstance(data, list):
+            # Group parent: toggle all members
+            for oid in data:
+                self.scene.update(oid, visible=visible)
+            for i in range(item.childCount()):
+                item.child(i).setCheckState(
+                    0, Qt.CheckState.Checked if visible
+                    else Qt.CheckState.Unchecked)
+        else:
+            # Single object: if part of multi-selection, toggle all
+            selected = self.tree.selectedItems()
+            if len(selected) > 1:
+                for it in selected:
+                    d = it.data(0, Qt.ItemDataRole.UserRole)
+                    if d is not None and not isinstance(d, list):
+                        it.setCheckState(
+                            0, Qt.CheckState.Checked if visible
+                            else Qt.CheckState.Unchecked)
+                        self.scene.update(d, visible=visible)
+            else:
+                self.scene.update(data, visible=visible)
         self._updating = False
