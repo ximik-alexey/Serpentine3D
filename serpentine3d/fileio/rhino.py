@@ -17,6 +17,8 @@ import threading
 import numpy as np
 import rhino3dm as r3
 from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
+from OCP.BRepLib import breplib
+from OCP.TopLoc import TopLoc_Location
 
 from ..core import geometry, occ
 from ..core.deferred import DeferredShape
@@ -590,7 +592,7 @@ def _build_from_trims(rface, surf, table, vertices, tol):
             src = table.get(t.EdgeIndex)
             if src is None:
                 return None
-            ad = BRepAdaptor_Curve(TopoDS.Edge_s(src))
+            ad = BRepAdaptor_Curve(src)
             a, b = ad.FirstParameter(), ad.LastParameter()
             ts = np.linspace(a, b, _TRIM_SAMPLES)
             pts = [ad.Value(x) for x in ts]
@@ -641,14 +643,14 @@ def _build_from_trims(rface, surf, table, vertices, tol):
             if ei not in built:
                 a, b = it["range"]
                 e = TopoDS_Edge()
-                bb.MakeEdge(e, BRep_Tool.Curve_s(TopoDS.Edge_s(it["src"]), 0.0, 0.0), tol)
+                bb.MakeEdge(e, BRep_Tool.Curve(it["src"], TopLoc_Location())[0], tol)
                 bb.Range(e, a, b)
                 bb.Add(e, vertex(it["first"]).Oriented(TopAbs_FORWARD))
                 bb.Add(e, vertex(it["last"]).Oriented(TopAbs_REVERSED))
                 built[ei] = (e, {}, (a, b))
             e, curves, _ = built[ei]
             curves["R" if it["rev"] else "F"] = curve
-            bb.Add(wire, TopoDS.Edge_s(e.Reversed()) if it["rev"] else e)
+            bb.Add(wire, e.Reversed() if it["rev"] else e)
         for e, curves, (a, b) in built.values():
             if "F" in curves and "R" in curves:
                 # a seam: one curve for each side, as OpenCascade keeps one
@@ -657,7 +659,7 @@ def _build_from_trims(rface, surf, table, vertices, tol):
                 bb.UpdateEdge(e, next(iter(curves.values())), surf, loc, tol)
             bb.Range(e, a, b)
         bb.Add(face, wire)
-    BRepLib.SameParameter_s(face, tol, True)
+    breplib.SameParameter(face, tol, True)
     area = geometry.surface_area(face)
     if not (geometry.is_valid(face) and np.isfinite(area) and area > 0):
         return None
@@ -698,7 +700,7 @@ def _face_from_edge_loops(rface, surf, table: dict):
             if edge is None:
                 return None                 # a trim we cannot follow
             occ_edge = geometry.occ.to_edge(edge)
-            mk.Add(TopoDS.Edge_s(occ_edge.Reversed()) if trim.IsReversed
+            mk.Add(occ_edge.Reversed() if trim.IsReversed
                    else occ_edge)
         if not mk.IsDone():
             return None
@@ -721,12 +723,12 @@ def _face_from_edge_loops(rface, surf, table: dict):
     best = None
     for flip in (False, True):
         try:
-            rim = TopoDS.Wire_s(outer.Reversed()) if flip else outer
+            rim = outer.Reversed() if flip else outer
             mk = BRepBuilderAPI_MakeFace(surf, rim, True)
             if not mk.IsDone():
                 continue
             for wire in inner:
-                mk.Add(wire if flip else TopoDS.Wire_s(wire.Reversed()))
+                mk.Add(wire if flip else wire.Reversed())
             fix = ShapeFix_Face(geometry.occ.to_face(mk.Face()))
             fix.Perform()
             face = fix.Face()
@@ -1057,7 +1059,7 @@ def _face_shapes(brep, fi: int, occ_edges: list, edge_boxes,
     # ways of trimming below cost time per edge. Prune once, use twice.
     etol = max(span * 1e-4, 1e-6)
 
-    surf = BRep_Tool.Surface_s(geometry.occ.to_face(face))
+    surf = BRep_Tool.Surface(geometry.occ.to_face(face), TopLoc_Location())
 
     # Best path: the trim the file already describes. Everything below it
     # is here for the faces whose loops cannot be followed.
@@ -1179,7 +1181,7 @@ def _shell_to_solid(shape):
         # measured, not read off the shell's flag: sewing does not always
         # set it, and a watertight import then stayed open (#34)
         from OCP.BRep import BRep_Tool
-        if BRep_Tool.IsClosed_s(shell):
+        if BRep_Tool.IsClosed(shell):
             try:
                 mk = BRepBuilderAPI_MakeSolid(shell)
                 if mk.IsDone():
@@ -1191,7 +1193,7 @@ def _shell_to_solid(shape):
                     where = BRepClass3d_SolidClassifier(solid)
                     where.PerformInfinitePoint(1e-7)
                     if where.State() == TopAbs_State.TopAbs_IN:
-                        solid = TopoDS.Solid_s(solid.Reversed())
+                        solid = solid.Reversed()
                     if geometry.is_valid(solid):
                         return solid
             except Exception:

@@ -1672,6 +1672,15 @@ class Viewport(QOpenGLWidget):
             self._line_width(1.6)
             GL.glBindVertexArray(self._preview.vao)
             GL.glDrawArrays(GL.GL_LINES, 0, len(allv))
+        if (not vis_segs and not hidden_segs
+                and self._hlr_inflight is not None):
+            # HLR still running: wireframe beats a blank white screen.
+            GL.glEnable(GL.GL_DEPTH_TEST)
+            view = cam.view_matrix()
+            mvp64 = cam.proj_matrix(w, h) @ view
+            self._draw_objects(mvp64, view, mode_override="wireframe",
+                               light_background=True)
+            GL.glDisable(GL.GL_DEPTH_TEST)
         GL.glEnable(GL.GL_DEPTH_TEST)
 
     def _cull(self, mvp, objects: list) -> list:
@@ -2216,7 +2225,8 @@ class Viewport(QOpenGLWidget):
         # The pass may be a move behind the camera: the result is still
         # the best hidden-line picture we have, and the next frame
         # schedules the catch-up for the key we are on now.
-        self._tech_cache = (self._hlr_inflight, data)
+        if data and (data.get("visible") or data.get("hidden")):
+            self._tech_cache = (self._hlr_inflight, data)
         self._hlr_inflight = None
         self.update()
 

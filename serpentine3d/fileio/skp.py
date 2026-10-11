@@ -24,6 +24,7 @@ import uuid
 from collections import Counter
 
 import numpy as np
+from OCP.BRepLib import breplib
 
 from ..core import geometry
 from ..utils.units import convert
@@ -246,7 +247,7 @@ class _Found:
             if piece.ShapeType() != occ.SOLID:
                 piece = geometry.join_surfaces([piece])
             if piece.ShapeType() == occ.SOLID:
-                BRepLib.OrientClosedSolid_s(occ.to_solid(piece))
+                breplib.OrientClosedSolid(occ.to_solid(piece))
             out.append(piece)
         return out
 

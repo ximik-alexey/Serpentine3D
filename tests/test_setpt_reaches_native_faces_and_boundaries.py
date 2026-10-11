@@ -6,6 +6,7 @@ import pytest
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
 from OCP.Geom import Geom_BezierSurface
+from OCP.GeomConvert import geomconvert
 from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 from OCP.GeomConvert import GeomConvert
 from OCP.TColgp import TColgp_Array2OfPnt
@@ -64,7 +65,7 @@ def _nurbs_face():
     for i in range(3):
         for j in range(3):
             poles.SetValue(i + 1, j + 1, gp_Pnt(5 * i, 3 * j, heights[3 * i + j]))
-    surface = GeomConvert.SurfaceToBSplineSurface_s(Geom_BezierSurface(poles))
+    surface = geomconvert.SurfaceToBSplineSurface(Geom_BezierSurface(poles))
     maker = BRepBuilderAPI_MakeFace(surface, 1e-7)
     assert maker.IsDone()
     face = maker.Face()

@@ -28,7 +28,7 @@ def _box_faces(reverse: bool):
     if not reverse:
         return faces
     from OCP.TopoDS import TopoDS
-    return [TopoDS.Face_s(f.Reversed()) for f in faces]
+    return [f.Reversed() for f in faces]
 
 
 def _sewn(faces):

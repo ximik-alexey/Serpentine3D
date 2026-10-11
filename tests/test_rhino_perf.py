@@ -14,6 +14,9 @@ surface's bounding box grown by `tol`.
 import numpy as np
 import pytest
 
+from OCP.BRep import BRep_Tool
+from OCP.TopLoc import TopLoc_Location
+
 from serpentine3d.core import geometry
 from serpentine3d.fileio import rhino
 
@@ -47,7 +50,7 @@ def _grid(n: int):
 
 def _surface_of(face):
     from OCP.BRep import BRep_Tool
-    return BRep_Tool.Surface_s(geometry.occ.to_face(face))
+    return BRep_Tool.Surface(geometry.occ.to_face(face), TopLoc_Location())
 
 
 def test_pruning_keeps_exactly_the_edges_that_bound_the_face():

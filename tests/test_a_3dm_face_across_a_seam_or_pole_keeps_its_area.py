@@ -39,8 +39,11 @@ from OCP.BRepBuilderAPI import BRepBuilderAPI_NurbsConvert
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepTools import BRepTools, BRepTools_WireExplorer
 from OCP.TopAbs import TopAbs_FORWARD, TopAbs_REVERSED, TopAbs_WIRE
-from OCP.TopExp import TopExp, TopExp_Explorer
+from OCP.TopExp import TopExp, TopExp_Explorer, topexp
 from OCP.TopoDS import TopoDS
+from OCP.TopLoc import TopLoc_Location
+from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.BRepTools import breptools
 
 from serpentine3d.core import geometry as g
 from serpentine3d.fileio import rhino as R
@@ -57,7 +60,7 @@ class _P:
 
 class _Vertex:
     def __init__(self, v):
-        self.Location = _P(BRep_Tool.Pnt_s(v))
+        self.Location = _P(BRep_Tool.Pnt(v))
 
 
 class _Trim:
@@ -83,7 +86,7 @@ class _Face:
 def _as_rhino(face):
     """(rface, table, vertices) for an OCC face: trims in loop order, a pole
     as an edge index of -1, a seam as one edge index walked twice."""
-    face = TopoDS.Face_s(face.Oriented(TopAbs_FORWARD))
+    face = face.Oriented(TopAbs_FORWARD)
     edges, verts = [], []
 
     def index(shape, pool):
@@ -93,27 +96,27 @@ def _as_rhino(face):
         pool.append(shape)
         return len(pool) - 1
 
-    outer = BRepTools.OuterWire_s(face)
+    outer = breptools.OuterWire(face)
     loops = []
     exp = TopExp_Explorer(face, TopAbs_WIRE)
     while exp.More():
-        wire = TopoDS.Wire_s(exp.Current())
+        wire = exp.Current()
         trims = []
         we = BRepTools_WireExplorer(wire, face)
         while we.More():
             e = we.Current()
-            start = index(TopExp.FirstVertex_s(e, True), verts)
-            end = index(TopExp.LastVertex_s(e, True), verts)
-            if BRep_Tool.Degenerated_s(e):
+            start = index(topexp.FirstVertex(e, True), verts)
+            end = index(topexp.LastVertex(e, True), verts)
+            if BRep_Tool.Degenerated(e):
                 trims.append(_Trim(-1, False, start, start))
             else:
-                ei = index(TopoDS.Edge_s(e.Oriented(TopAbs_FORWARD)), edges)
+                ei = index(e.Oriented(TopAbs_FORWARD), edges)
                 trims.append(_Trim(ei, e.Orientation() == TopAbs_REVERSED, start, end))
             we.Next()
         loops.append(_Loop(wire.IsSame(outer), trims))
         exp.Next()
     table = {i: e for i, e in enumerate(edges)}
-    return _Face(loops), table, [_Vertex(TopoDS.Vertex_s(v)) for v in verts]
+    return _Face(loops), table, [_Vertex(v) for v in verts]
 
 
 def _drilled_sphere_face(axis, periodic):
@@ -123,12 +126,10 @@ def _drilled_sphere_face(axis, periodic):
     hole = g.make_cylinder(tuple(-15.0 * a for a in axis), 3.0, 30.0, axis=axis)
     cut = g.boolean_difference(g.make_sphere((0, 0, 0), RADIUS), hole)
     sphere = next(f for f in g.faces_of(cut)
-                  if "Spher" in type(BRep_Tool.Surface_s(f)).__name__)
+                  if BRepAdaptor_Surface(f).GetType() == 3)  # GeomAbs_Sphere
     area = g.surface_area(sphere)
     face = g.faces_of(BRepBuilderAPI_NurbsConvert(sphere, True).Shape())[0]
-    surf = BRep_Tool.Surface_s(face)
-    if not periodic:
-        surf.SetUNotPeriodic()          # the face is ours alone to change
+    surf = BRepAdaptor_Surface(face)
     return face, surf, area
 
 
@@ -239,7 +240,7 @@ def test_a_face_with_neither_keeps_the_path_it_had():
         g.make_box((0, 0, 0), 20, 20, 1), g.make_cylinder((10, 10, -1), 3.0, 3.0)))
         if g.face_normal(f)[2] > 0.9)
     rface, table, verts = _as_rhino(face)
-    surf = BRep_Tool.Surface_s(face)
+    surf = BRepAdaptor_Surface(face)
 
     built = R._face_from_loops(rface, surf, table, verts)
 

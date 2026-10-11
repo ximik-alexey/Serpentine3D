@@ -176,7 +176,7 @@ class _HlrWorker:
         return got[0] if got else ""
 
     def project(self, shapes: list, origin, view_dir, x_dir,
-                include_hidden: bool = True, timeout: float = 120.0) -> dict:
+                include_hidden: bool = True, timeout: float = 600.0) -> dict:
         """Like hlr_project, but crash-isolated. Empty result on failure.
 
         Returns `visible_by_shape`: one visible-edge list per input shape, in

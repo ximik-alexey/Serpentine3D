@@ -12,6 +12,8 @@ import math
 import numpy as np
 
 from . import geometry, occ
+from OCP.TopLoc import TopLoc_Location
+from OCP.GeomConvert import geomconvert
 from .tolerance import tol
 
 
@@ -214,7 +216,7 @@ def deform_surface(shape, fn) -> object:
         raise geometry.GeometryError("Nothing to deform")
     new_faces = []
     for face in faces:
-        surf = BRep_Tool.Surface_s(face)
+        surf = BRep_Tool.Surface(face, TopLoc_Location())
         if isinstance(surf, Geom_BSplineSurface):
             bs = surf.Copy()
         else:
@@ -224,7 +226,7 @@ def deform_surface(shape, fn) -> object:
             trimmed = Geom_RectangularTrimmedSurface(
                 surf, ad.FirstUParameter(), ad.LastUParameter(),
                 ad.FirstVParameter(), ad.LastVParameter())
-            bs = GeomConvert.SurfaceToBSplineSurface_s(trimmed)
+            bs = geomconvert.SurfaceToBSplineSurface(trimmed)
         # refine both directions for fidelity
         for _ in range(40):
             if bs.NbUPoles() >= 16:

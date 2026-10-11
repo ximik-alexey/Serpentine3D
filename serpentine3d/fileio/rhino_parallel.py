@@ -50,6 +50,7 @@ import traceback
 
 import numpy as np
 import rhino3dm as r3
+from OCP.BinTools import bintools
 
 from ..core.mesh import MeshShape
 from ..utils.spawn import spawn_executable as _spawn_executable
@@ -217,7 +218,7 @@ def _encode(shape):
         return ("mesh", shape.vertices, shape.triangles, shape.normals)
     from OCP.BinTools import BinTools
     buf = io.BytesIO()
-    BinTools.Write_s(shape, buf)
+    bintools.Write(shape, buf)
     return ("occ", buf.getvalue(), None, None)
 
 
@@ -228,7 +229,7 @@ def _decode(payload):
     from OCP.BinTools import BinTools
     from OCP.TopoDS import TopoDS_Shape
     shape = TopoDS_Shape()
-    BinTools.Read_s(shape, io.BytesIO(first))
+    bintools.Read(shape, io.BytesIO(first))
     # BinTools answers a bare TopoDS_Shape whatever it was handed, and OCCT's
     # bindings reject one where they want a TopoDS_Edge. Put the class back,
     # so nothing downstream can tell which process built the object.

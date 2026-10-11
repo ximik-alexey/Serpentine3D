@@ -71,7 +71,7 @@ def text_curves(text: str, height: float, font_family: str = "sans",
 
     path = text_path(text, height, font_family, bold,
                      font_style=font_style, alignment=alignment)
-    tolerance = Precision.Confusion_s()
+    tolerance = Precision.Confusion()
 
     curves = []
     wire = None

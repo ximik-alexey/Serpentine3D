@@ -175,7 +175,11 @@ def _vertex_curvature(face, tri, n: int, reversed_face: bool) -> np.ndarray:
     try:
         from OCP.BRepAdaptor import BRepAdaptor_Surface
         from OCP.BRepLProp import BRepLProp_SLProps
+        from OCP.Geom import GeomAbs_Compound, GeomAbs_OtherSurface
         surf = BRepAdaptor_Surface(face)
+        stype = surf.GetType()
+        if stype in (GeomAbs_Compound, GeomAbs_OtherSurface):
+            return curv
         props = BRepLProp_SLProps(surf, 2, 1e-6)
         sign = -1.0 if reversed_face else 1.0
         for i in range(1, n + 1):
