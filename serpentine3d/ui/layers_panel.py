@@ -462,7 +462,14 @@ class LayersPanel(QWidget):
             return
         self._updating = True
         picked = self._remember_picked()
-        self.tree.clear()
+        # takeTopLevelItem keeps the C++ object alive (Python owns it);
+        # clear() would delete it while Qt's model still references it.
+        if not hasattr(self, '_stale_items'):
+            self._stale_items = []
+        self._stale_items.clear()
+        while self.tree.topLevelItemCount() > 0:
+            self._stale_items.append(self.tree.takeTopLevelItem(0))
+        QTimer.singleShot(100, lambda: self._stale_items.clear())
         counts = {}
         for obj in self.scene.all():
             counts[obj.layer_id] = counts.get(obj.layer_id, 0) + 1
