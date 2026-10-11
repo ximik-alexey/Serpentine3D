@@ -24,3 +24,6 @@ packaging/macos/*.iconset/
 # Graft local code graph (regenerable cache, like node_modules)
 graft/
 .venv312
+
+# terminal output capture, rewritten on every launch
+.errors
