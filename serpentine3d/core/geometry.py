@@ -1886,20 +1886,39 @@ def match_curve(a, b, continuity: str = "tangent") -> TopoDS_Shape:
         else:            # a arrives at the joint along t_join
             bs.SetPole(next_i, _pnt(tuple(pb - t_join * dist)))
     return BRepBuilderAPI_MakeEdge(bs).Edge()
-def sweep2(profile, rail1, rail2) -> TopoDS_Shape:
-    """Sweep a profile along rail1, scaled/guided by rail2 (two-rail sweep)."""
+def sweep2(profile, rail1, rail2, solid: bool = False) -> TopoDS_Shape:
+    """Sweep a profile along rail1, guided by rail2 (two-rail sweep).
+    A wire profile sweeps to a shell (the pipe-shell path, the second
+    rail setting the section normal). With solid=True the profile must
+    be closed and planar: the result is a solid via the same
+    MakePipe/face path as sweep1 (the second rail is not used there —
+    the pipe API in this kernel build takes a single spine)."""
     from .occ import BRepOffsetAPI_MakePipeShell
-    spine = occ.to_wire(to_wire(rail1))
-    aux = occ.to_wire(to_wire(rail2))
-    ps = BRepOffsetAPI_MakePipeShell(spine)
-    ps.SetMode(aux, True)          # curvilinear equivalence with aux rail
-    ps.Add(occ.to_wire(to_wire(profile)))
-    ps.Build()
-    if not ps.IsDone():
-        raise GeometryError("Two-rail sweep failed (check that rails run "
-                            "the same direction and the profile touches "
-                            "the first rail)")
-    return ps.Shape()
+    if solid and not is_closed_curve(profile):
+        raise GeometryError("A solid two-rail sweep requires a closed "
+                            "profile")
+    if not solid:
+        # surface: the pipe-shell path
+        spine = occ.to_wire(to_wire(rail1))
+        aux = occ.to_wire(to_wire(rail2))
+        ps = BRepOffsetAPI_MakePipeShell(spine)
+        ps.SetMode(aux, True)    # curvilinear equivalence with aux rail
+        ps.Add(occ.to_wire(to_wire(profile)))
+        ps.Build()
+        if not ps.IsDone():
+            raise GeometryError("Two-rail sweep failed (check that rails "
+                                "run the same direction and the profile "
+                                "touches the first rail)")
+        return ps.Shape()
+    # solid: the same path as sweep1 — MakePipe with a planar face
+    # profile. The second rail is not used: the pipe API in this
+    # kernel build takes a single spine.
+    result = BRepOffsetAPI_MakePipe(occ.to_wire(to_wire(rail1)),
+                                   planar_face(profile))
+    if not result.IsDone():
+        raise GeometryError("Two-rail solid sweep failed (check the "
+                            "profile touches the first rail)")
+    return result.Shape()
 def _curve_pieces(edges: list, cutters: list) -> list:
     """Group split edges into pieces, breaking chains at cut vertices."""
     from Core.BRepExtrema import BRepExtrema_DistShapeShape

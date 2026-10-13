@@ -187,6 +187,9 @@ def cmd_sweep2(ctx):
                             max_count=1, allow_preselected=False)
     profiles = yield SelectReq("Select profile curve", kinds=("curve",),
                                max_count=1, allow_preselected=False)
-    srf = g.sweep2(profiles[0].shape, rail1[0].shape, rail2[0].shape)
+    solid = (yield OptionReq("Create a solid?", options=["Yes", "No"],
+                             default="No")) == "Yes"
+    srf = g.sweep2(profiles[0].shape, rail1[0].shape, rail2[0].shape,
+                   solid=solid)
     obj = ctx.scene.add(srf)
     ctx.echo(f"Created {obj.name}.")

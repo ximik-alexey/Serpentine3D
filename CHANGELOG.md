@@ -35,6 +35,13 @@
   solid directly, so a circular profile along a rail gives a tube; an
   open profile is refused for the solid variant and the default No keeps
   the old surface result.
+
+- **Two-rail sweep can produce a solid (#69).** After picking the two
+  rails and the profile, `sweep2` now asks "Create a solid?" (Yes/No,
+  default No). Yes requires a closed planar profile and sweeps it as a
+  face along the first rail (the same 8.0.1 path as `sweep`; the second
+  rail guides the surface variant only); an open profile is refused for
+  the solid variant and the default No keeps the old surface result.
 ### Fixed
 
 - **Grouping and ungrouping preserve selection (#63).** The resulting group
