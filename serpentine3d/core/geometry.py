@@ -2668,7 +2668,7 @@ def _curve_arrows(shape, count: int) -> list:
     from Core.gp import gp_Pnt, gp_Vec
     st = shape.ShapeType()
     if st == occ.WIRE:
-        ad = BRepAdaptor_CompCurve(occ.to_wire(shape))
+        ad = BRepAdaptor_CompCurve(to_wire(shape))
     elif st == occ.EDGE:
         ad = occ.edge_adaptor(occ.to_edge(shape))
     else:
@@ -2733,7 +2733,7 @@ def sample_curve(shape, count: int) -> list[Point]:
         raise GeometryError("Need at least 2 sample points")
     st = shape.ShapeType()
     if st == occ.WIRE:
-        adaptor = BRepAdaptor_CompCurve(occ.to_wire(shape))
+        adaptor = BRepAdaptor_CompCurve(to_wire(shape))
     elif st == occ.EDGE:
         adaptor = occ.edge_adaptor(occ.to_edge(shape))
     else:
@@ -2769,7 +2769,7 @@ def sample_curve_frames(shape, count: int) -> list[tuple]:
         raise GeometryError("Need at least 2 sample points")
     st = shape.ShapeType()
     if st == occ.WIRE:
-        adaptor = BRepAdaptor_CompCurve(occ.to_wire(shape))
+        adaptor = BRepAdaptor_CompCurve(to_wire(shape))
     elif st == occ.EDGE:
         adaptor = occ.edge_adaptor(occ.to_edge(shape))
     else:
