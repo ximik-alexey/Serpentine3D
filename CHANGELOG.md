@@ -29,6 +29,11 @@
   groups them under the parent product. The objects panel shows the
   assembly as a named group with its part count; flat files and IGES
   imports are unaffected.
+- **Sweep can produce a solid (#69).** After picking the rail and the
+  profile, `sweep` now asks "Create a solid?" (Yes/No, default No).
+  Yes closes the swept shell into a solid, so a circular profile along
+  a rail gives a tube; an open profile is refused for the solid variant
+  and the default No keeps the old surface result.
 ### Fixed
 
 - **Grouping and ungrouping preserve selection (#63).** The resulting group

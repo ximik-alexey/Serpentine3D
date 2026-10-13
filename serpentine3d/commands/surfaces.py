@@ -1,7 +1,7 @@
 """Surface creation commands."""
 
 from ..core import geometry as g
-from .base import NumberReq, PointReq, SelectReq, command
+from .base import NumberReq, OptionReq, PointReq, SelectReq, command
 
 
 @command("extrude", aliases=("ext", "extrudecrv"))
@@ -105,7 +105,9 @@ def cmd_sweep1(ctx):
     rails = yield SelectReq("Select rail curve", kinds=("curve",), max_count=1)
     profiles = yield SelectReq("Select profile curve", kinds=("curve",),
                                max_count=1, allow_preselected=False)
-    srf = g.sweep1(profiles[0].shape, rails[0].shape)
+    solid = (yield OptionReq("Create a solid?", options=["Yes", "No"],
+                             default="No")) == "Yes"
+    srf = g.sweep1(profiles[0].shape, rails[0].shape, solid=solid)
     obj = ctx.scene.add(srf)
     ctx.echo(f"Created {obj.name}.")
 

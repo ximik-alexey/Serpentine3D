@@ -688,11 +688,19 @@ def loft(profiles: list, solid: bool = False, ruled: bool = False) -> TopoDS_Sha
     if not lofter.IsDone():
         raise GeometryError("Loft failed")
     return lofter.Shape()
-def sweep1(profile, rail) -> TopoDS_Shape:
+def sweep1(profile, rail, solid: bool = False) -> TopoDS_Shape:
     result = BRepOffsetAPI_MakePipe(occ.to_wire(to_wire(rail)), to_wire(profile))
     if not result.IsDone():
         raise GeometryError("Sweep failed")
-    return result.Shape()
+    shape = result.Shape()
+    if solid:
+        if not is_closed_curve(profile):
+            raise GeometryError("A solid sweep requires a closed profile")
+        mk = occ.BRepBuilderAPI_MakeSolid(shape)
+        if not mk.IsDone():
+            raise GeometryError("Sweep failed (profile must be closed)")
+        shape = mk.Shape()
+    return shape
 def planar_face(shape) -> TopoDS_Shape:
     """Planar surface from a closed planar curve."""
     if not is_closed_curve(shape):
