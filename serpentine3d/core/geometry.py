@@ -52,7 +52,9 @@ from .occ import (
     TopExp_Explorer,
     TopLoc_Location,
     TopoDS_Compound,
+    TopoDS_Edge,
     TopoDS_Shape,
+    TopoDS_Wire,
     gp_Ax1,
     gp_Ax2,
     gp_Circ,
@@ -366,13 +368,61 @@ def loose_pieces(shape) -> list:
     if len(out) < 2 or any(p.ShapeType() != occ.SOLID for p in out):
         return []
     return [occ.to_solid(p) for p in out]
+def _promote_edge(edge) -> TopoDS_Shape:
+    """Rebuild a bare-typed edge as a typed one, its direction kept.
+
+    A shape that is typed bare (imported or rebuilt geometry) passes
+    ShapeType() but fails the kernel's typed checks, so it is rebuilt
+    from its curve. BRepAdaptor_Curve reads an edge forwards and
+    ignores the REVERSED mark, so the geometry is turned round for a
+    reversed edge, the way _reversed_edge does."""
+    from Core.BRep import BRep_Tool
+    from Core.BRepAdaptor import BRepAdaptor_Curve
+    from Core.TopAbs import TopAbs_Orientation
+    curve = BRep_Tool.Curve(edge, TopLoc_Location())[0]
+    if curve is None:
+        raise GeometryError("That curve has no 3D geometry")
+    ad = BRepAdaptor_Curve(edge)
+    first, last = ad.FirstParameter(), ad.LastParameter()
+    if edge.Orientation() == TopAbs_Orientation.TopAbs_REVERSED:
+        curve = curve.Reversed()
+        first, last = (curve.ReversedParameter(last),
+                       curve.ReversedParameter(first))
+    mk = BRepBuilderAPI_MakeEdge(curve, first, last)
+    if not mk.IsDone():
+        raise GeometryError("Could not rebuild that edge")
+    return mk.Edge()
+def _promote_edges(shape) -> list:
+    """The edge(s) of a curve, each typed for the kernel's checks."""
+    out = []
+    exp = TopExp_Explorer(shape, occ.EDGE)
+    while exp.More():
+        e = exp.Current()
+        out.append(e if isinstance(e, TopoDS_Edge) else _promote_edge(e))
+        exp.Next()
+    if not out:
+        raise GeometryError("Not a curve")
+    return out
 def to_wire(shape) -> TopoDS_Shape:
-    """Promote an edge (or wire) to a wire."""
+    """Promote an edge (or wire) to a wire.
+
+    A shape that is typed bare (imported or rebuilt geometry) passes
+    ShapeType() but fails the kernel's typed checks, so it is rebuilt
+    from its curves first."""
     st = shape.ShapeType()
     if st == occ.WIRE:
-        return shape
+        if isinstance(shape, TopoDS_Wire):
+            return shape
+        mk = BRepBuilderAPI_MakeWire()
+        for e in _promote_edges(shape):
+            mk.Add(e)
+        if not mk.IsDone():
+            raise GeometryError("Failed to make wire from edge")
+        return mk.Wire()
     if st == occ.EDGE:
-        mk = BRepBuilderAPI_MakeWire(occ.to_edge(shape))
+        e = shape if isinstance(shape, TopoDS_Edge) else _promote_edge(shape)
+        mk = BRepBuilderAPI_MakeWire()
+        mk.Add(e)
         if not mk.IsDone():
             raise GeometryError("Failed to make wire from edge")
         return mk.Wire()
