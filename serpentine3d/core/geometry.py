@@ -379,10 +379,17 @@ def _promote_edge(edge) -> TopoDS_Shape:
     from Core.BRep import BRep_Tool
     from Core.BRepAdaptor import BRepAdaptor_Curve
     from Core.TopAbs import TopAbs_Orientation
+    # The adaptor throws a clean Standard_NullObject on a
+    # geometry-less (degenerate) edge, while BRep_Tool.Curve
+    # segfaults on one in this build: probe with the adaptor
+    # first, and only then read the curve.
+    try:
+        ad = BRepAdaptor_Curve(edge)
+    except Exception:
+        raise GeometryError("That curve has no 3D geometry")
     curve = BRep_Tool.Curve(edge, TopLoc_Location())[0]
     if curve is None:
         raise GeometryError("That curve has no 3D geometry")
-    ad = BRepAdaptor_Curve(edge)
     first, last = ad.FirstParameter(), ad.LastParameter()
     if edge.Orientation() == TopAbs_Orientation.TopAbs_REVERSED:
         curve = curve.Reversed()
