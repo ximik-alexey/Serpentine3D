@@ -2918,7 +2918,12 @@ def _apply_trsf(shape, trsf: gp_Trsf, copy: bool = True) -> TopoDS_Shape:
     from .hatch import HatchShape
     if isinstance(shape, (TextShape, HatchShape)):
         return shape.transformed(_transform_matrix(trsf))
-    return BRepBuilderAPI_Transform(shape, trsf, copy).Shape()
+    # A located shape keeps its TopoDS type, while a baked
+    # BRepBuilderAPI_Transform copy comes back as a bare
+    # TopoDS_Shape that the kernel's typed constructors reject.
+    # OCCT algorithms honor the location, and the scene splits
+    # the pose out into the object's `_location`.
+    return shape.Located(TopLoc_Location(trsf))
 def _transform_matrix(trsf):
     return [[trsf.Value(row, col) for col in range(1, 5)]
             for row in range(1, 4)] + [[0., 0., 0., 1.]]
