@@ -410,6 +410,22 @@ def _promote_edges(shape) -> list:
     if not out:
         raise GeometryError("Not a curve")
     return out
+def _require_curve_geometry(shape) -> None:
+    """A clean GeometryError if any edge of the curve has no 3D
+    geometry (a degenerate, zero-length piece). The pipe APIs do not
+    report that with IsDone — their Build throws a raw
+    Standard_NullObject, which would kill the command."""
+    from Core.BRepAdaptor import BRepAdaptor_Curve
+    exp = TopExp_Explorer(shape, occ.EDGE)
+    while exp.More():
+        e = exp.Current()
+        try:
+            BRepAdaptor_Curve(e)
+        except Exception:
+            raise GeometryError("That curve has a degenerate piece with "
+                                "no geometry; redraw it without "
+                                "zero-length segments")
+        exp.Next()
 def to_wire(shape) -> TopoDS_Shape:
     """Promote an edge (or wire) to a wire.
 
@@ -747,6 +763,8 @@ def loft(profiles: list, solid: bool = False, ruled: bool = False) -> TopoDS_Sha
     return lofter.Shape()
 def sweep1(profile, rail, solid: bool = False) -> TopoDS_Shape:
     # a wire profile sweeps to a shell; a face sweeps to a solid
+    _require_curve_geometry(profile)
+    _require_curve_geometry(rail)
     if solid:
         if not is_closed_curve(profile):
             raise GeometryError("A solid sweep requires a closed profile")
@@ -1951,6 +1969,8 @@ def sweep2(profile, rail1, rail2, solid: bool = False) -> TopoDS_Shape:
     MakePipe/face path as sweep1 (the second rail is not used there —
     the pipe API in this kernel build takes a single spine)."""
     from .occ import BRepOffsetAPI_MakePipeShell
+    for c in (profile, rail1, rail2):
+        _require_curve_geometry(c)
     if solid and not is_closed_curve(profile):
         raise GeometryError("A solid two-rail sweep requires a closed "
                             "profile")
